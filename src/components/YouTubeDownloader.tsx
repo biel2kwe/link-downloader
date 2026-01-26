@@ -72,9 +72,6 @@ export const YouTubeDownloader = () => {
         description: "O vídeo está sendo baixado em uma nova aba.",
       });
     } else {
-      if (result.alternativeUrl) {
-        setAlternativeUrl(result.alternativeUrl);
-      }
       toast({
         title: "Erro no download",
         description: result.suggestion || result.error || "Falha ao processar o vídeo.",

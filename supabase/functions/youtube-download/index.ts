@@ -9,44 +9,6 @@ interface DownloadRequest {
   url: string;
   quality?: string;
   audioOnly?: boolean;
-  proxyDownload?: boolean;
-}
-
-// Sanitize filename to ASCII-safe characters
-function sanitizeFilename(filename: string): string {
-  // Replace common accented characters
-  const accents: Record<string, string> = {
-    "á": "a", "à": "a", "ã": "a", "â": "a", "ä": "a",
-    "é": "e", "è": "e", "ê": "e", "ë": "e",
-    "í": "i", "ì": "i", "î": "i", "ï": "i",
-    "ó": "o", "ò": "o", "õ": "o", "ô": "o", "ö": "o",
-    "ú": "u", "ù": "u", "û": "u", "ü": "u",
-    "ç": "c", "ñ": "n",
-    "Á": "A", "À": "A", "Ã": "A", "Â": "A", "Ä": "A",
-    "É": "E", "È": "E", "Ê": "E", "Ë": "E",
-    "Í": "I", "Ì": "I", "Î": "I", "Ï": "I",
-    "Ó": "O", "Ò": "O", "Õ": "O", "Ô": "O", "Ö": "O",
-    "Ú": "U", "Ù": "U", "Û": "U", "Ü": "U",
-    "Ç": "C", "Ñ": "N",
-  };
-  
-  let sanitized = filename;
-  for (const [accented, plain] of Object.entries(accents)) {
-    sanitized = sanitized.split(accented).join(plain);
-  }
-  
-  // Remove any remaining non-ASCII characters
-  sanitized = sanitized.replace(/[^\x20-\x7E]/g, '');
-  
-  // Replace problematic characters for filenames
-  sanitized = sanitized.replace(/[<>:"/\\|?*]/g, '_');
-  
-  // Ensure it ends with proper extension
-  if (!sanitized.match(/\.(mp4|mp3|webm|mkv)$/i)) {
-    sanitized += '.mp4';
-  }
-  
-  return sanitized || 'video.mp4';
 }
 
 // List of public cobalt instances
@@ -79,9 +41,14 @@ async function getCobaltDownloadUrl(videoUrl: string, quality: string, audioOnly
         console.log(`Cobalt response:`, JSON.stringify(data));
         
         if (data.url) {
+          // Clean filename for display
+          const filename = (data.filename || "video.mp4")
+            .replace(/[^\w\s\-\.\(\)]/g, "")
+            .trim() || "video.mp4";
+            
           return {
             url: data.url,
-            filename: sanitizeFilename(data.filename || "video.mp4"),
+            filename: filename,
           };
         }
       }
@@ -103,7 +70,7 @@ serve(async (req) => {
 
   try {
     const body: DownloadRequest = await req.json();
-    const { url, quality = "1080", audioOnly = false, proxyDownload = false } = body;
+    const { url, quality = "1080", audioOnly = false } = body;
 
     if (!url) {
       return new Response(
@@ -112,7 +79,7 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Processing: ${url}, quality: ${quality}, audioOnly: ${audioOnly}, proxy: ${proxyDownload}`);
+    console.log(`Processing: ${url}, quality: ${quality}, audioOnly: ${audioOnly}`);
 
     // Get download URL from Cobalt
     const result = await getCobaltDownloadUrl(url, quality, audioOnly);
@@ -141,58 +108,15 @@ serve(async (req) => {
       );
     }
 
-    // If proxy download is requested, stream the file through the edge function
-    if (proxyDownload) {
-      console.log(`Proxying download from: ${result.url}`);
-      
-      const downloadResponse = await fetch(result.url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          "Accept": "*/*",
-        },
-      });
-
-      if (!downloadResponse.ok) {
-        console.error(`Download failed: ${downloadResponse.status}`);
-        return new Response(
-          JSON.stringify({ 
-            error: "Download failed", 
-            status: downloadResponse.status 
-          }),
-          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const contentType = downloadResponse.headers.get("content-type") || (audioOnly ? "audio/mpeg" : "video/mp4");
-      const contentLength = downloadResponse.headers.get("content-length");
-      
-      console.log(`Streaming file: ${contentType}, size: ${contentLength || 'unknown'}`);
-
-      // Build response headers
-      const responseHeaders: Record<string, string> = {
-        ...corsHeaders,
-        "Content-Type": contentType,
-        "Content-Disposition": `attachment; filename="${result.filename}"`,
-      };
-      
-      if (contentLength && contentLength !== "0") {
-        responseHeaders["Content-Length"] = contentLength;
-      }
-
-      // Stream the response
-      return new Response(downloadResponse.body, {
-        headers: responseHeaders,
-      });
-    }
-
-    // Return the download URL for client to fetch via proxy
+    // Return the direct download URL from Cobalt
+    // The tunnel URL works when accessed directly by the browser
     return new Response(
       JSON.stringify({
         success: true,
         downloadUrl: result.url,
         filename: result.filename,
         status: "ready",
-        requiresProxy: true,
+        directDownload: true,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
