@@ -1,18 +1,26 @@
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
+interface DownloadService {
+  name: string;
+  url: string;
+  description: string;
+}
+
 interface DownloadResult {
   success: boolean;
+  videoId?: string;
+  title?: string;
   downloadUrl?: string;
-  filename?: string;
+  downloadServices?: DownloadService[];
   error?: string;
-  isExternal?: boolean;
 }
 
 export const useYouTubeDownload = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [downloadServices, setDownloadServices] = useState<DownloadService[]>([]);
 
   const downloadVideo = async (
     url: string,
@@ -20,8 +28,9 @@ export const useYouTubeDownload = () => {
     audioOnly: boolean
   ): Promise<DownloadResult> => {
     setIsDownloading(true);
-    setProgress(10);
+    setProgress(20);
     setError(null);
+    setDownloadServices([]);
 
     try {
       const qualityMap: Record<string, string> = {
@@ -32,7 +41,7 @@ export const useYouTubeDownload = () => {
         "360p": "360",
       };
 
-      setProgress(30);
+      setProgress(50);
 
       const { data, error: fnError } = await supabase.functions.invoke(
         "youtube-download",
@@ -45,7 +54,7 @@ export const useYouTubeDownload = () => {
         }
       );
 
-      setProgress(60);
+      setProgress(80);
 
       if (fnError) {
         throw new Error(fnError.message);
@@ -59,46 +68,27 @@ export const useYouTubeDownload = () => {
         };
       }
 
+      if (data.downloadServices) {
+        setDownloadServices(data.downloadServices);
+      }
+
       if (data.downloadUrl) {
-        setProgress(80);
-        
-        // If external (like y2mate), just open in new tab
-        if (data.isExternal) {
-          window.open(data.downloadUrl, "_blank");
-          setProgress(100);
-          return {
-            success: true,
-            downloadUrl: data.downloadUrl,
-            filename: data.filename,
-            isExternal: true,
-          };
-        }
-
-        // For cobalt URLs, create a download link
-        // The browser will handle the download natively
-        const link = document.createElement("a");
-        link.href = data.downloadUrl;
-        link.download = data.filename || "video.mp4";
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        
-        // Append, click, and remove
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-
+        // Open the download service in a new tab
+        window.open(data.downloadUrl, "_blank");
         setProgress(100);
 
         return {
           success: true,
+          videoId: data.videoId,
+          title: data.title,
           downloadUrl: data.downloadUrl,
-          filename: data.filename,
+          downloadServices: data.downloadServices,
         };
       }
 
       return {
         success: false,
-        error: "Nenhuma URL de download recebida",
+        error: "Nenhuma URL de download disponível",
       };
 
     } catch (err) {
@@ -115,10 +105,16 @@ export const useYouTubeDownload = () => {
     }
   };
 
+  const openDownloadService = (serviceUrl: string) => {
+    window.open(serviceUrl, "_blank");
+  };
+
   return {
     downloadVideo,
     isDownloading,
     progress,
     error,
+    downloadServices,
+    openDownloadService,
   };
 };
