@@ -11,66 +11,97 @@ interface DownloadRequest {
   audioOnly?: boolean;
 }
 
-// List of public cobalt instances
+// Multiple cobalt instances to try
 const COBALT_INSTANCES = [
-  "https://cobalt-api.kwiatekmiki.com",
+  { url: "https://cobalt-api.kwiatekmiki.com" },
+  { url: "https://api.cobalt.tools" },
 ];
 
-async function getCobaltDownloadUrl(videoUrl: string, quality: string, audioOnly: boolean): Promise<{ url: string; filename: string } | null> {
-  for (const instance of COBALT_INSTANCES) {
-    try {
-      console.log(`Trying instance: ${instance}`);
-      
-      const response = await fetch(`${instance}/`, {
-        method: "POST",
-        headers: {
-          "Accept": "application/json",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          url: videoUrl,
-          videoQuality: quality,
-          audioFormat: "mp3",
-          downloadMode: audioOnly ? "audio" : "auto",
-          filenameStyle: "pretty",
-        }),
-      });
+interface CobaltResult {
+  downloadUrl: string;
+  filename: string;
+  status: string;
+}
 
-      if (response.ok) {
-        const data = await response.json();
-        console.log(`Cobalt response:`, JSON.stringify(data));
-        
-        if (data.url) {
-          // Clean filename for display
-          const filename = (data.filename || "video.mp4")
-            .replace(/[^\w\s\-\.\(\)]/g, "")
-            .trim() || "video.mp4";
-            
-          return {
-            url: data.url,
-            filename: filename,
-          };
-        }
-      }
-      
-      const text = await response.text();
-      console.log(`Instance ${instance} failed:`, response.status, text);
-    } catch (error) {
-      console.log(`Instance ${instance} error:`, error);
+async function tryCobaltInstance(
+  instance: { url: string },
+  videoUrl: string,
+  quality: string,
+  audioOnly: boolean
+): Promise<CobaltResult | null> {
+  try {
+    console.log(`Trying cobalt instance: ${instance.url}`);
+    
+    const response = await fetch(`${instance.url}/`, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        url: videoUrl,
+        videoQuality: quality,
+        audioFormat: "mp3",
+        downloadMode: audioOnly ? "audio" : "auto",
+        filenameStyle: "basic", // Use basic for cleaner filenames
+      }),
+    });
+
+    const responseText = await response.text();
+    console.log(`Instance ${instance.url} response: ${response.status} - ${responseText.substring(0, 500)}`);
+
+    if (!response.ok) {
+      return null;
     }
+
+    const data = JSON.parse(responseText);
+    
+    if (data.url) {
+      return {
+        downloadUrl: data.url,
+        filename: data.filename || `video.${audioOnly ? "mp3" : "mp4"}`,
+        status: data.status || "unknown",
+      };
+    }
+
+    // Handle picker response (multiple formats available)
+    if (data.picker && data.picker.length > 0) {
+      return {
+        downloadUrl: data.picker[0].url,
+        filename: `video.${audioOnly ? "mp3" : "mp4"}`,
+        status: "picker",
+      };
+    }
+
+    return null;
+  } catch (error) {
+    console.log(`Instance ${instance.url} error:`, error);
+    return null;
   }
-  return null;
+}
+
+// Try to get video info from YouTube oEmbed
+async function getVideoTitle(videoId: string): Promise<string> {
+  try {
+    const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+    if (response.ok) {
+      const data = await response.json();
+      return data.title?.replace(/[^\w\s-]/g, "").substring(0, 50) || "video";
+    }
+  } catch (e) {
+    console.log("Failed to get video title:", e);
+  }
+  return "video";
 }
 
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
     const body: DownloadRequest = await req.json();
-    const { url, quality = "1080", audioOnly = false } = body;
+    const { url, quality = "720", audioOnly = false } = body;
 
     if (!url) {
       return new Response(
@@ -81,52 +112,61 @@ serve(async (req) => {
 
     console.log(`Processing: ${url}, quality: ${quality}, audioOnly: ${audioOnly}`);
 
-    // Get download URL from Cobalt
-    const result = await getCobaltDownloadUrl(url, quality, audioOnly);
-    
-    if (!result) {
-      // Extract video ID for fallback
-      const videoIdMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
-      const videoId = videoIdMatch ? videoIdMatch[1] : null;
+    // Extract video ID
+    const videoIdMatch = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([^&\n?#]+)/);
+    const videoId = videoIdMatch ? videoIdMatch[1] : null;
+
+    // Try each cobalt instance
+    for (const instance of COBALT_INSTANCES) {
+      const result = await tryCobaltInstance(instance, url, quality, audioOnly);
       
-      if (videoId) {
+      if (result) {
+        console.log(`Success from ${instance.url}: ${result.status}`);
+        
+        // Get video title for filename
+        let filename = result.filename;
+        if (videoId && filename === `video.${audioOnly ? "mp3" : "mp4"}`) {
+          const title = await getVideoTitle(videoId);
+          filename = `${title}.${audioOnly ? "mp3" : "mp4"}`;
+        }
+        
         return new Response(
           JSON.stringify({
             success: true,
-            downloadUrl: `https://ssyoutube.com/watch?v=${videoId}`,
-            filename: "video.mp4",
-            isExternal: true,
-            message: "Use o site externo para baixar",
+            downloadUrl: result.downloadUrl,
+            filename: filename.replace(/[^\w\s.-]/g, "_"),
+            status: result.status,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      
+    }
+
+    // Fallback: use y2mate alternative
+    if (videoId) {
+      console.log("All instances failed, using fallback");
       return new Response(
-        JSON.stringify({ error: "Não foi possível obter link de download" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({
+          success: true,
+          downloadUrl: `https://www.y2mate.com/youtube/${videoId}`,
+          filename: "video.mp4",
+          status: "external",
+          isExternal: true,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Return the direct download URL from Cobalt
-    // The tunnel URL works when accessed directly by the browser
     return new Response(
-      JSON.stringify({
-        success: true,
-        downloadUrl: result.url,
-        filename: result.filename,
-        status: "ready",
-        directDownload: true,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({ error: "Não foi possível processar o vídeo" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error) {
-    console.error("Download error:", error);
+    console.error("Error:", error);
     return new Response(
       JSON.stringify({ 
-        error: error instanceof Error ? error.message : "Failed to process download",
-        suggestion: "Tente novamente ou use uma resolução diferente"
+        error: error instanceof Error ? error.message : "Erro desconhecido",
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

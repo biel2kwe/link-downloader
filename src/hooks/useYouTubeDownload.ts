@@ -6,8 +6,7 @@ interface DownloadResult {
   downloadUrl?: string;
   filename?: string;
   error?: string;
-  suggestion?: string;
-  fileSize?: number;
+  isExternal?: boolean;
 }
 
 export const useYouTubeDownload = () => {
@@ -35,17 +34,18 @@ export const useYouTubeDownload = () => {
 
       setProgress(30);
 
-      // Get download URL from edge function
       const { data, error: fnError } = await supabase.functions.invoke(
         "youtube-download",
         {
           body: {
             url,
-            quality: qualityMap[quality] || "1080",
+            quality: qualityMap[quality] || "720",
             audioOnly,
           },
         }
       );
+
+      setProgress(60);
 
       if (fnError) {
         throw new Error(fnError.message);
@@ -56,31 +56,36 @@ export const useYouTubeDownload = () => {
         return {
           success: false,
           error: data.error,
-          suggestion: data.suggestion,
         };
       }
-
-      setProgress(60);
 
       if (data.downloadUrl) {
         setProgress(80);
         
-        // Open the cobalt tunnel URL directly in a new tab
-        // This bypasses CORS since it's a direct navigation, not a fetch
-        const newWindow = window.open(data.downloadUrl, "_blank");
+        // If external (like y2mate), just open in new tab
+        if (data.isExternal) {
+          window.open(data.downloadUrl, "_blank");
+          setProgress(100);
+          return {
+            success: true,
+            downloadUrl: data.downloadUrl,
+            filename: data.filename,
+            isExternal: true,
+          };
+        }
+
+        // For cobalt URLs, create a download link
+        // The browser will handle the download natively
+        const link = document.createElement("a");
+        link.href = data.downloadUrl;
+        link.download = data.filename || "video.mp4";
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
         
-        // Also create a hidden iframe to trigger download without leaving the page
-        const iframe = document.createElement("iframe");
-        iframe.style.display = "none";
-        iframe.src = data.downloadUrl;
-        document.body.appendChild(iframe);
-        
-        // Remove iframe after 30 seconds
-        setTimeout(() => {
-          if (iframe.parentNode) {
-            iframe.parentNode.removeChild(iframe);
-          }
-        }, 30000);
+        // Append, click, and remove
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
 
         setProgress(100);
 
@@ -93,11 +98,11 @@ export const useYouTubeDownload = () => {
 
       return {
         success: false,
-        error: "No download URL received",
+        error: "Nenhuma URL de download recebida",
       };
 
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Download failed";
+      const message = err instanceof Error ? err.message : "Erro no download";
       console.error("Download error:", err);
       setError(message);
       return {
