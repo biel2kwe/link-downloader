@@ -12,7 +12,44 @@ interface DownloadRequest {
   proxyDownload?: boolean;
 }
 
-// List of public cobalt instances that don't require auth
+// Sanitize filename to ASCII-safe characters
+function sanitizeFilename(filename: string): string {
+  // Replace common accented characters
+  const accents: Record<string, string> = {
+    "á": "a", "à": "a", "ã": "a", "â": "a", "ä": "a",
+    "é": "e", "è": "e", "ê": "e", "ë": "e",
+    "í": "i", "ì": "i", "î": "i", "ï": "i",
+    "ó": "o", "ò": "o", "õ": "o", "ô": "o", "ö": "o",
+    "ú": "u", "ù": "u", "û": "u", "ü": "u",
+    "ç": "c", "ñ": "n",
+    "Á": "A", "À": "A", "Ã": "A", "Â": "A", "Ä": "A",
+    "É": "E", "È": "E", "Ê": "E", "Ë": "E",
+    "Í": "I", "Ì": "I", "Î": "I", "Ï": "I",
+    "Ó": "O", "Ò": "O", "Õ": "O", "Ô": "O", "Ö": "O",
+    "Ú": "U", "Ù": "U", "Û": "U", "Ü": "U",
+    "Ç": "C", "Ñ": "N",
+  };
+  
+  let sanitized = filename;
+  for (const [accented, plain] of Object.entries(accents)) {
+    sanitized = sanitized.split(accented).join(plain);
+  }
+  
+  // Remove any remaining non-ASCII characters
+  sanitized = sanitized.replace(/[^\x20-\x7E]/g, '');
+  
+  // Replace problematic characters for filenames
+  sanitized = sanitized.replace(/[<>:"/\\|?*]/g, '_');
+  
+  // Ensure it ends with proper extension
+  if (!sanitized.match(/\.(mp4|mp3|webm|mkv)$/i)) {
+    sanitized += '.mp4';
+  }
+  
+  return sanitized || 'video.mp4';
+}
+
+// List of public cobalt instances
 const COBALT_INSTANCES = [
   "https://cobalt-api.kwiatekmiki.com",
 ];
@@ -44,7 +81,7 @@ async function getCobaltDownloadUrl(videoUrl: string, quality: string, audioOnly
         if (data.url) {
           return {
             url: data.url,
-            filename: data.filename || "video.mp4",
+            filename: sanitizeFilename(data.filename || "video.mp4"),
           };
         }
       }
@@ -111,6 +148,7 @@ serve(async (req) => {
       const downloadResponse = await fetch(result.url, {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          "Accept": "*/*",
         },
       });
 
@@ -128,16 +166,22 @@ serve(async (req) => {
       const contentType = downloadResponse.headers.get("content-type") || (audioOnly ? "audio/mpeg" : "video/mp4");
       const contentLength = downloadResponse.headers.get("content-length");
       
-      console.log(`Streaming file: ${contentType}, size: ${contentLength}`);
+      console.log(`Streaming file: ${contentType}, size: ${contentLength || 'unknown'}`);
+
+      // Build response headers
+      const responseHeaders: Record<string, string> = {
+        ...corsHeaders,
+        "Content-Type": contentType,
+        "Content-Disposition": `attachment; filename="${result.filename}"`,
+      };
+      
+      if (contentLength && contentLength !== "0") {
+        responseHeaders["Content-Length"] = contentLength;
+      }
 
       // Stream the response
       return new Response(downloadResponse.body, {
-        headers: {
-          ...corsHeaders,
-          "Content-Type": contentType,
-          "Content-Disposition": `attachment; filename="${result.filename}"`,
-          ...(contentLength ? { "Content-Length": contentLength } : {}),
-        },
+        headers: responseHeaders,
       });
     }
 
