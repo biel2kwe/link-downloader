@@ -30,7 +30,7 @@ export const YouTubeDownloader = () => {
   const [includeAudio, setIncludeAudio] = useState(true);
   const [alternativeUrl, setAlternativeUrl] = useState<string | null>(null);
   const { toast } = useToast();
-  const { downloadVideo, isDownloading, progress, downloadedBytes, totalBytes, formatBytes, error: downloadError } = useYouTubeDownload();
+  const { downloadVideo, isDownloading, progress, error: downloadError } = useYouTubeDownload();
 
   const handleUrlSubmit = () => {
     if (!url.trim()) {
@@ -159,19 +159,11 @@ export const YouTubeDownloader = () => {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">
-                      {progress < 30 ? "Preparando download..." : "Baixando vídeo..."}
+                      {progress < 60 ? "Processando..." : "Abrindo download..."}
                     </span>
                     <span className="text-primary font-medium">{Math.round(progress)}%</span>
                   </div>
                   <Progress value={progress} className="h-2" />
-                  {downloadedBytes > 0 && (
-                    <div className="flex items-center justify-between text-xs text-muted-foreground">
-                      <span>{formatBytes(downloadedBytes)} baixados</span>
-                      {totalBytes > 0 && (
-                        <span>de {formatBytes(totalBytes)}</span>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
 
