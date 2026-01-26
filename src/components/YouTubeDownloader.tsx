@@ -28,9 +28,9 @@ export const YouTubeDownloader = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [resolution, setResolution] = useState("1080p");
   const [includeAudio, setIncludeAudio] = useState(true);
-  const [alternativeUrl, setAlternativeUrl] = useState<string | null>(null);
+  const [showServices, setShowServices] = useState(false);
   const { toast } = useToast();
-  const { downloadVideo, isDownloading, progress, error: downloadError } = useYouTubeDownload();
+  const { downloadVideo, isDownloading, progress, error: downloadError, downloadServices, openDownloadService } = useYouTubeDownload();
 
   const handleUrlSubmit = () => {
     if (!url.trim()) {
@@ -53,7 +53,7 @@ export const YouTubeDownloader = () => {
     }
 
     setIsLoading(true);
-    setAlternativeUrl(null);
+    setShowServices(false);
     setTimeout(() => {
       setVideoId(id);
       setIsLoading(false);
@@ -67,9 +67,10 @@ export const YouTubeDownloader = () => {
     const result = await downloadVideo(url, resolution, audioOnly);
 
     if (result.success) {
+      setShowServices(true);
       toast({
-        title: "Download iniciado!",
-        description: "O vídeo está sendo baixado em uma nova aba.",
+        title: "Serviço de download aberto!",
+        description: "Escolha a qualidade desejada no site que foi aberto.",
       });
     } else {
       toast({
@@ -85,6 +86,7 @@ export const YouTubeDownloader = () => {
     setVideoId(null);
     setResolution("1080p");
     setIncludeAudio(true);
+    setShowServices(false);
   };
 
   return (
@@ -159,7 +161,7 @@ export const YouTubeDownloader = () => {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">
-                      {progress < 60 ? "Processando..." : "Abrindo download..."}
+                      {progress < 60 ? "Processando..." : "Abrindo serviço..."}
                     </span>
                     <span className="text-primary font-medium">{Math.round(progress)}%</span>
                   </div>
@@ -167,36 +169,54 @@ export const YouTubeDownloader = () => {
                 </div>
               )}
 
-              {/* Error/Alternative banner */}
-              {downloadError && alternativeUrl && (
-                <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
-                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-                  <div className="text-sm text-muted-foreground flex-1">
-                    <p className="font-medium text-foreground mb-2">Serviço temporariamente indisponível</p>
-                    <p className="mb-3">
-                      Use o link alternativo abaixo para baixar o vídeo:
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => window.open(alternativeUrl, "_blank")}
-                      className="gap-2"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      Abrir site alternativo
-                    </Button>
+              {/* Download services */}
+              {showServices && downloadServices.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-start gap-3 p-4 rounded-xl bg-green-500/10 border border-green-500/30">
+                    <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0 mt-0.5" />
+                    <div className="text-sm text-muted-foreground flex-1">
+                      <p className="font-medium text-foreground mb-2">Serviços de download disponíveis</p>
+                      <p className="mb-3">
+                        Um serviço foi aberto em nova aba. Se não funcionou, tente uma das alternativas:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {downloadServices.map((service) => (
+                          <Button
+                            key={service.name}
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openDownloadService(service.url)}
+                            className="gap-2"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            {service.name}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
 
-              {/* Success state info */}
-              {!isDownloading && !downloadError && (
+              {/* Error state */}
+              {downloadError && (
+                <div className="flex items-start gap-3 p-4 rounded-xl bg-destructive/10 border border-destructive/30">
+                  <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                  <div className="text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground mb-1">Erro no processamento</p>
+                    <p>{downloadError}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Info state */}
+              {!isDownloading && !downloadError && !showServices && (
                 <div className="flex items-start gap-3 p-4 rounded-xl bg-primary/10 border border-primary/30">
                   <CheckCircle2 className="w-5 h-5 text-primary shrink-0 mt-0.5" />
                   <div className="text-sm text-muted-foreground">
                     <p className="font-medium text-foreground mb-1">Pronto para download</p>
                     <p>
-                      Clique no botão abaixo para iniciar o download. O vídeo será aberto em uma nova aba.
+                      Clique no botão abaixo. Um serviço de download será aberto em nova aba onde você pode escolher a qualidade.
                     </p>
                   </div>
                 </div>
@@ -222,7 +242,7 @@ export const YouTubeDownloader = () => {
                   ) : (
                     <Download className="w-5 h-5" />
                   )}
-                  {isDownloading ? "Processando..." : `Baixar ${resolution} ${includeAudio ? "com áudio" : "sem áudio"}`}
+                  {isDownloading ? "Processando..." : `Baixar ${resolution}`}
                 </Button>
               </div>
             </div>
