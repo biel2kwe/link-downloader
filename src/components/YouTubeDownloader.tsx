@@ -74,7 +74,7 @@ export const YouTubeDownloader = () => {
     } else {
       toast({
         title: "Erro no download",
-        description: result.suggestion || result.error || "Falha ao processar o vídeo.",
+        description: result.error || "Falha ao processar o vídeo.",
         variant: "destructive",
       });
     }
