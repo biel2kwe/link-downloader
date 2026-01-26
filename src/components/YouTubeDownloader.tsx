@@ -1,11 +1,13 @@
 import { useState } from "react";
-import { Download, Link, Loader2, AlertCircle, Youtube } from "lucide-react";
+import { Download, Link, Loader2, AlertCircle, Youtube, ExternalLink, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { VideoPreview } from "./VideoPreview";
 import { ResolutionSelector } from "./ResolutionSelector";
 import { AudioToggle } from "./AudioToggle";
 import { useToast } from "@/hooks/use-toast";
+import { useYouTubeDownload } from "@/hooks/useYouTubeDownload";
 
 const extractVideoId = (url: string): string | null => {
   const patterns = [
@@ -26,7 +28,9 @@ export const YouTubeDownloader = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [resolution, setResolution] = useState("1080p");
   const [includeAudio, setIncludeAudio] = useState(true);
+  const [alternativeUrl, setAlternativeUrl] = useState<string | null>(null);
   const { toast } = useToast();
+  const { downloadVideo, isDownloading, progress, error: downloadError } = useYouTubeDownload();
 
   const handleUrlSubmit = () => {
     if (!url.trim()) {
@@ -49,17 +53,34 @@ export const YouTubeDownloader = () => {
     }
 
     setIsLoading(true);
+    setAlternativeUrl(null);
     setTimeout(() => {
       setVideoId(id);
       setIsLoading(false);
     }, 800);
   };
 
-  const handleDownload = () => {
-    toast({
-      title: "Backend necessário",
-      description: "Para baixar vídeos do YouTube, é necessário conectar o Lovable Cloud para processar os vídeos no servidor.",
-    });
+  const handleDownload = async () => {
+    if (!url) return;
+
+    const audioOnly = !includeAudio;
+    const result = await downloadVideo(url, resolution, audioOnly);
+
+    if (result.success) {
+      toast({
+        title: "Download iniciado!",
+        description: "O vídeo está sendo baixado em uma nova aba.",
+      });
+    } else {
+      if (result.alternativeUrl) {
+        setAlternativeUrl(result.alternativeUrl);
+      }
+      toast({
+        title: "Erro no download",
+        description: result.suggestion || result.error || "Falha ao processar o vídeo.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleReset = () => {
@@ -136,23 +157,58 @@ export const YouTubeDownloader = () => {
                 onToggle={setIncludeAudio}
               />
 
-              {/* Info banner */}
-              <div className="flex items-start gap-3 p-4 rounded-xl bg-secondary/50 border border-border">
-                <AlertCircle className="w-5 h-5 text-primary shrink-0 mt-0.5" />
-                <div className="text-sm text-muted-foreground">
-                  <p className="font-medium text-foreground mb-1">Processamento no servidor necessário</p>
-                  <p>
-                    Baixar vídeos do YouTube requer processamento no servidor devido às restrições do navegador. 
-                    Conecte o Lovable Cloud para habilitar esta funcionalidade.
-                  </p>
+              {/* Download progress */}
+              {isDownloading && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Processando download...</span>
+                    <span className="text-primary font-medium">{progress}%</span>
+                  </div>
+                  <Progress value={progress} className="h-2" />
                 </div>
-              </div>
+              )}
+
+              {/* Error/Alternative banner */}
+              {downloadError && alternativeUrl && (
+                <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30">
+                  <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="text-sm text-muted-foreground flex-1">
+                    <p className="font-medium text-foreground mb-2">Serviço temporariamente indisponível</p>
+                    <p className="mb-3">
+                      Use o link alternativo abaixo para baixar o vídeo:
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => window.open(alternativeUrl, "_blank")}
+                      className="gap-2"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Abrir site alternativo
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Success state info */}
+              {!isDownloading && !downloadError && (
+                <div className="flex items-start gap-3 p-4 rounded-xl bg-primary/10 border border-primary/30">
+                  <CheckCircle2 className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                  <div className="text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground mb-1">Pronto para download</p>
+                    <p>
+                      Clique no botão abaixo para iniciar o download. O vídeo será aberto em uma nova aba.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="flex gap-3">
                 <Button
                   variant="outline"
                   className="flex-1"
                   onClick={handleReset}
+                  disabled={isDownloading}
                 >
                   Limpar
                 </Button>
@@ -160,9 +216,14 @@ export const YouTubeDownloader = () => {
                   variant="glow"
                   className="flex-1"
                   onClick={handleDownload}
+                  disabled={isDownloading}
                 >
-                  <Download className="w-5 h-5" />
-                  Baixar {resolution} {includeAudio ? "com áudio" : "sem áudio"}
+                  {isDownloading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Download className="w-5 h-5" />
+                  )}
+                  {isDownloading ? "Processando..." : `Baixar ${resolution} ${includeAudio ? "com áudio" : "sem áudio"}`}
                 </Button>
               </div>
             </div>
