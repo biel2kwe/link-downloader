@@ -8,12 +8,23 @@ interface DownloadResult {
   error?: string;
   suggestion?: string;
   alternativeUrl?: string;
+  fileSize?: number;
 }
 
 export const useYouTubeDownload = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [downloadedBytes, setDownloadedBytes] = useState(0);
+  const [totalBytes, setTotalBytes] = useState(0);
   const [error, setError] = useState<string | null>(null);
+
+  const formatBytes = (bytes: number): string => {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  };
 
   const downloadVideo = async (
     url: string,
@@ -21,11 +32,12 @@ export const useYouTubeDownload = () => {
     audioOnly: boolean
   ): Promise<DownloadResult> => {
     setIsDownloading(true);
-    setProgress(10);
+    setProgress(5);
+    setDownloadedBytes(0);
+    setTotalBytes(0);
     setError(null);
 
     try {
-      // Map quality string to numeric value
       const qualityMap: Record<string, string> = {
         "2160p": "2160",
         "1080p": "1080",
@@ -34,168 +46,166 @@ export const useYouTubeDownload = () => {
         "360p": "360",
       };
 
-      setProgress(20);
+      setProgress(10);
 
-      const { data, error: fnError } = await supabase.functions.invoke("youtube-download", {
-        body: {
-          url,
-          quality: qualityMap[quality] || "1080",
-          audioOnly,
-        },
-      });
+      // Step 1: Get download info
+      const { data: infoData, error: infoError } = await supabase.functions.invoke(
+        "youtube-download",
+        {
+          body: {
+            url,
+            quality: qualityMap[quality] || "1080",
+            audioOnly,
+            proxyDownload: false,
+          },
+        }
+      );
 
-      setProgress(40);
-
-      if (fnError) {
-        throw new Error(fnError.message);
+      if (infoError) {
+        throw new Error(infoError.message);
       }
 
-      if (data.error) {
-        setError(data.error);
+      if (infoData.error) {
+        setError(infoData.error);
         return {
           success: false,
-          error: data.error,
-          suggestion: data.suggestion,
-          alternativeUrl: data.alternativeUrl,
+          error: infoData.error,
+          suggestion: infoData.suggestion,
         };
       }
 
-      // If we have a download URL, properly download the file
-      if (data.downloadUrl) {
-        const filename = data.filename || `video_${Date.now()}.mp4`;
-        
-        // Check if it's an external redirect (like ssyoutube)
-        if (data.isExternal) {
-          window.open(data.downloadUrl, "_blank");
-          setProgress(100);
-          return {
-            success: true,
-            downloadUrl: data.downloadUrl,
-            filename: filename,
-          };
+      // If external link, just open it
+      if (infoData.isExternal) {
+        window.open(infoData.downloadUrl, "_blank");
+        setProgress(100);
+        return {
+          success: true,
+          downloadUrl: infoData.downloadUrl,
+          filename: infoData.filename,
+        };
+      }
+
+      setProgress(20);
+
+      // Step 2: Download through proxy (edge function streams the file)
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+      const proxyResponse = await fetch(
+        `${supabaseUrl}/functions/v1/youtube-download`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${supabaseKey}`,
+            "apikey": supabaseKey,
+          },
+          body: JSON.stringify({
+            url,
+            quality: qualityMap[quality] || "1080",
+            audioOnly,
+            proxyDownload: true,
+          }),
         }
+      );
 
-        setProgress(50);
+      if (!proxyResponse.ok) {
+        const errorText = await proxyResponse.text();
+        console.error("Proxy error:", errorText);
+        throw new Error("Falha no download do vídeo");
+      }
 
-        try {
-          // Fetch the actual video file
-          const response = await fetch(data.downloadUrl, {
-            method: "GET",
-            headers: {
-              "Accept": "*/*",
-            },
-          });
+      setProgress(30);
 
-          if (!response.ok) {
-            throw new Error(`Download failed: ${response.status}`);
-          }
+      // Check content type - if JSON, it's an error
+      const contentType = proxyResponse.headers.get("content-type");
+      if (contentType?.includes("application/json")) {
+        const jsonError = await proxyResponse.json();
+        throw new Error(jsonError.error || "Download failed");
+      }
 
-          setProgress(60);
+      // Get content length
+      const contentLength = proxyResponse.headers.get("content-length");
+      const total = contentLength ? parseInt(contentLength, 10) : 0;
+      setTotalBytes(total);
 
-          // Get content length for progress tracking
-          const contentLength = response.headers.get("content-length");
-          const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
+      // Read the stream
+      const reader = proxyResponse.body?.getReader();
+      if (!reader) {
+        throw new Error("Não foi possível ler a resposta");
+      }
 
-          // Read the response as a stream for progress tracking
-          const reader = response.body?.getReader();
-          if (!reader) {
-            throw new Error("Failed to read response body");
-          }
+      const chunks: Uint8Array[] = [];
+      let received = 0;
 
-          const chunks: Uint8Array[] = [];
-          let receivedLength = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          while (true) {
-            const { done, value } = await reader.read();
+        chunks.push(value);
+        received += value.length;
+        setDownloadedBytes(received);
 
-            if (done) break;
-
-            chunks.push(value);
-            receivedLength += value.length;
-
-            // Update progress (60-95% during download)
-            if (totalSize > 0) {
-              const downloadProgress = (receivedLength / totalSize) * 35;
-              setProgress(60 + Math.min(downloadProgress, 35));
-            } else {
-              // If no content-length, show indeterminate progress
-              setProgress(Math.min(95, 60 + (receivedLength / 1000000) * 10));
-            }
-          }
-
-          setProgress(95);
-
-          // Combine chunks into a single ArrayBuffer
-          const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-          const combined = new Uint8Array(totalLength);
-          let position = 0;
-          for (const chunk of chunks) {
-            combined.set(chunk, position);
-            position += chunk.length;
-          }
-
-          const blob = new Blob([combined.buffer], { 
-            type: audioOnly ? "audio/mpeg" : "video/mp4" 
-          });
-
-          // Verify blob has content
-          if (blob.size === 0) {
-            throw new Error("Downloaded file is empty");
-          }
-
-          // Create download link
-          const blobUrl = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = blobUrl;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-
-          // Clean up blob URL after a delay
-          setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
-
-          setProgress(100);
-
-          return {
-            success: true,
-            downloadUrl: data.downloadUrl,
-            filename: filename,
-          };
-
-        } catch (fetchError) {
-          console.error("Direct download failed, trying alternative method:", fetchError);
-          
-          // Fallback: try using an anchor tag with the URL directly
-          // Some cobalt instances return direct download links
-          const link = document.createElement("a");
-          link.href = data.downloadUrl;
-          link.download = filename;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-
-          setProgress(100);
-
-          return {
-            success: true,
-            downloadUrl: data.downloadUrl,
-            filename: filename,
-          };
+        // Update progress (30-95%)
+        if (total > 0) {
+          const downloadProgress = (received / total) * 65;
+          setProgress(30 + Math.min(downloadProgress, 65));
+        } else {
+          setProgress(Math.min(90, 30 + (received / 10000000) * 60));
         }
       }
 
+      setProgress(95);
+
+      // Verify we got data
+      if (chunks.length === 0 || received === 0) {
+        throw new Error("Arquivo vazio recebido");
+      }
+
+      // Combine chunks
+      const combined = new Uint8Array(received);
+      let position = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, position);
+        position += chunk.length;
+      }
+
+      // Create blob with correct MIME type
+      const mimeType = audioOnly ? "audio/mpeg" : "video/mp4";
+      const blob = new Blob([combined.buffer], { type: mimeType });
+
+      // Double check blob size
+      if (blob.size < 1000) {
+        throw new Error("Arquivo muito pequeno - download incompleto");
+      }
+
+      // Create download
+      const filename = infoData.filename || `video_${Date.now()}.${audioOnly ? "mp3" : "mp4"}`;
+      const blobUrl = URL.createObjectURL(blob);
+      
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      link.style.display = "none";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      // Cleanup after delay
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+
+      setProgress(100);
+
       return {
-        success: false,
-        error: "No download URL received",
-        suggestion: data.suggestion,
-        alternativeUrl: data.alternativeUrl,
+        success: true,
+        downloadUrl: blobUrl,
+        filename: filename,
+        fileSize: blob.size,
       };
 
     } catch (err) {
       const message = err instanceof Error ? err.message : "Download failed";
+      console.error("Download error:", err);
       setError(message);
       return {
         success: false,
@@ -203,7 +213,11 @@ export const useYouTubeDownload = () => {
       };
     } finally {
       setIsDownloading(false);
-      setTimeout(() => setProgress(0), 2000);
+      setTimeout(() => {
+        setProgress(0);
+        setDownloadedBytes(0);
+        setTotalBytes(0);
+      }, 3000);
     }
   };
 
@@ -211,6 +225,9 @@ export const useYouTubeDownload = () => {
     downloadVideo,
     isDownloading,
     progress,
+    downloadedBytes,
+    totalBytes,
+    formatBytes,
     error,
   };
 };
