@@ -61,7 +61,7 @@ async function getCobaltDownload(
   youtubeUrl: string,
   quality: string,
   audioOnly: boolean
-): Promise<{ url: string; filename?: string } | null> {
+): Promise<{ url: string; filename?: string; type?: string } | null> {
   
   const qualityMap: Record<string, string> = {
     "2160": "2160",
@@ -100,37 +100,43 @@ async function getCobaltDownload(
       const data = await response.json();
       console.log(`Cobalt response from ${instance}:`, JSON.stringify(data));
 
-      // Handle different response formats
-      if (data.status === "tunnel" || data.status === "redirect") {
-        const downloadUrl = data.url;
-        if (downloadUrl) {
-          console.log(`Got download URL from ${instance}: ${downloadUrl.substring(0, 100)}...`);
-          return { 
-            url: downloadUrl, 
-            filename: data.filename 
-          };
-        }
+      // Handle redirect status - this gives direct downloadable URLs
+      if (data.status === "redirect" && data.url) {
+        console.log(`Got redirect URL from ${instance}`);
+        return { 
+          url: data.url, 
+          filename: data.filename,
+          type: "redirect"
+        };
+      }
+
+      // Tunnel URLs don't work for direct browser downloads
+      // Skip them and try next instance or fallback
+      if (data.status === "tunnel") {
+        console.log(`Got tunnel URL from ${instance} - skipping (not compatible with direct download)`);
+        continue;
       }
 
       // Handle picker response (multiple formats available)
       if (data.status === "picker" && data.picker && data.picker.length > 0) {
-        // Get the first available option
         const firstOption = data.picker[0];
         if (firstOption.url) {
           console.log(`Got picker URL from ${instance}`);
           return { 
             url: firstOption.url, 
-            filename: data.filename 
+            filename: data.filename,
+            type: "redirect"
           };
         }
       }
 
       // Direct URL response
-      if (data.url) {
+      if (data.url && data.status !== "tunnel") {
         console.log(`Got direct URL from ${instance}`);
         return { 
           url: data.url, 
-          filename: data.filename 
+          filename: data.filename,
+          type: "redirect"
         };
       }
 
