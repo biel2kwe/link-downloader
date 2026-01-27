@@ -9,6 +9,7 @@ interface DownloadRequest {
   url: string;
   quality?: string;
   audioOnly?: boolean;
+  action?: "info" | "download";
 }
 
 // Extract video ID from various YouTube URL formats
@@ -44,10 +45,20 @@ async function getVideoInfo(videoId: string): Promise<{ title: string; author: s
   return null;
 }
 
-// List of working Cobalt API instances (ordered by reliability)
+// Sanitize filename for Content-Disposition header
+function sanitizeFilename(filename: string): string {
+  // Remove or replace problematic characters
+  return filename
+    .replace(/[^\w\s.-]/g, '')
+    .replace(/\s+/g, '_')
+    .substring(0, 100)
+    .trim() || 'video';
+}
+
+// List of working Cobalt API instances
 const COBALT_INSTANCES = [
-  "https://cobalt-api.meowing.de",
   "https://cobalt-api.kwiatekmiki.com",
+  "https://cobalt-api.meowing.de",
   "https://cobalt-backend.canine.tools",
   "https://kityune.imput.net",
   "https://nachos.imput.net",
@@ -56,12 +67,12 @@ const COBALT_INSTANCES = [
   "https://capi.3kh0.net",
 ];
 
-// Try to get download URL from Cobalt API
+// Get download URL from Cobalt API
 async function getCobaltDownload(
   youtubeUrl: string,
   quality: string,
   audioOnly: boolean
-): Promise<{ url: string; filename?: string; type?: string } | null> {
+): Promise<{ url: string; filename?: string; isTunnel: boolean } | null> {
   
   const qualityMap: Record<string, string> = {
     "2160": "2160",
@@ -98,26 +109,29 @@ async function getCobaltDownload(
       }
 
       const data = await response.json();
-      console.log(`Cobalt response from ${instance}:`, JSON.stringify(data));
+      console.log(`Cobalt response from ${instance}:`, JSON.stringify(data).substring(0, 200));
 
-      // Handle redirect status - this gives direct downloadable URLs
+      // Handle tunnel status - we can proxy these server-side!
+      if (data.status === "tunnel" && data.url) {
+        console.log(`Got tunnel URL from ${instance} - will proxy server-side`);
+        return { 
+          url: data.url, 
+          filename: data.filename,
+          isTunnel: true
+        };
+      }
+
+      // Handle redirect status - direct URLs
       if (data.status === "redirect" && data.url) {
         console.log(`Got redirect URL from ${instance}`);
         return { 
           url: data.url, 
           filename: data.filename,
-          type: "redirect"
+          isTunnel: false
         };
       }
 
-      // Tunnel URLs don't work for direct browser downloads
-      // Skip them and try next instance or fallback
-      if (data.status === "tunnel") {
-        console.log(`Got tunnel URL from ${instance} - skipping (not compatible with direct download)`);
-        continue;
-      }
-
-      // Handle picker response (multiple formats available)
+      // Handle picker response
       if (data.status === "picker" && data.picker && data.picker.length > 0) {
         const firstOption = data.picker[0];
         if (firstOption.url) {
@@ -125,18 +139,17 @@ async function getCobaltDownload(
           return { 
             url: firstOption.url, 
             filename: data.filename,
-            type: "redirect"
+            isTunnel: false
           };
         }
       }
 
       // Direct URL response
-      if (data.url && data.status !== "tunnel") {
-        console.log(`Got direct URL from ${instance}`);
+      if (data.url) {
         return { 
           url: data.url, 
           filename: data.filename,
-          type: "redirect"
+          isTunnel: data.status === "tunnel"
         };
       }
 
@@ -156,7 +169,7 @@ serve(async (req) => {
 
   try {
     const body: DownloadRequest = await req.json();
-    const { url, quality = "720", audioOnly = false } = body;
+    const { url, quality = "720", audioOnly = false, action = "download" } = body;
 
     if (!url) {
       return new Response(
@@ -165,7 +178,7 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Processing: ${url}, quality: ${quality}, audioOnly: ${audioOnly}`);
+    console.log(`Processing: ${url}, quality: ${quality}, audioOnly: ${audioOnly}, action: ${action}`);
 
     const videoId = extractVideoId(url);
     
@@ -178,73 +191,87 @@ serve(async (req) => {
 
     // Get video info for the title
     const videoInfo = await getVideoInfo(videoId);
-    const safeTitle = videoInfo?.title
-      ?.replace(/[^\w\s-]/g, "")
-      ?.substring(0, 50)
-      ?.trim() || "video";
+    const safeTitle = sanitizeFilename(videoInfo?.title || "video");
+    const extension = audioOnly ? "mp3" : "mp4";
 
     const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Try to get direct download URL from Cobalt
+    // Get download URL from Cobalt
     const cobaltResult = await getCobaltDownload(youtubeUrl, quality, audioOnly);
 
-    if (cobaltResult && cobaltResult.url) {
-      console.log(`Successfully got download URL`);
-      
+    if (!cobaltResult || !cobaltResult.url) {
+      console.log("Cobalt failed to return download URL");
       return new Response(
         JSON.stringify({
-          success: true,
-          videoId: videoId,
-          title: safeTitle,
-          author: videoInfo?.author || "Unknown",
-          downloadUrl: cobaltResult.url,
-          filename: cobaltResult.filename || `${safeTitle}.${audioOnly ? "mp3" : "mp4"}`,
-          quality: quality,
-          audioOnly: audioOnly,
-          method: "direct",
+          success: false,
+          error: "Não foi possível obter o link de download. Tente novamente.",
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Fallback: provide download service links
-    console.log(`Cobalt failed, providing fallback services`);
-    
-    const ssyoutubeUrl = `https://ssyoutube.com/watch?v=${videoId}`;
-    const y2mateUrl = `https://www.y2mate.com/youtube/${videoId}`;
-    const savefromUrl = `https://en.savefrom.net/1-youtube-video-downloader-${videoId}`;
+    // If action is "info", just return the metadata
+    if (action === "info") {
+      return new Response(
+        JSON.stringify({
+          success: true,
+          videoId: videoId,
+          title: videoInfo?.title || "video",
+          author: videoInfo?.author || "Unknown",
+          hasDownload: true,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        videoId: videoId,
-        title: safeTitle,
-        author: videoInfo?.author || "Unknown",
-        downloadUrl: ssyoutubeUrl,
-        downloadServices: [
-          {
-            name: "SSYoutube",
-            url: ssyoutubeUrl,
-            description: "Rápido e fácil",
-          },
-          {
-            name: "Y2Mate",
-            url: y2mateUrl,
-            description: "Múltiplas qualidades",
-          },
-          {
-            name: "SaveFrom",
-            url: savefromUrl,
-            description: "Alternativa confiável",
-          },
-        ],
-        filename: `${safeTitle}.${audioOnly ? "mp3" : "mp4"}`,
-        quality: quality,
-        audioOnly: audioOnly,
-        method: "fallback",
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    // Stream the file directly through the edge function
+    console.log(`Fetching video from: ${cobaltResult.url.substring(0, 100)}...`);
+    
+    const videoResponse = await fetch(cobaltResult.url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
+
+    if (!videoResponse.ok) {
+      console.log(`Failed to fetch video: ${videoResponse.status}`);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: `Erro ao baixar o vídeo: ${videoResponse.status}`,
+        }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const contentLength = videoResponse.headers.get("content-length");
+    const contentType = videoResponse.headers.get("content-type") || (audioOnly ? "audio/mpeg" : "video/mp4");
+    
+    console.log(`Video response - Content-Length: ${contentLength}, Content-Type: ${contentType}`);
+
+    // Check if we got valid content
+    if (contentLength === "0" || contentLength === null) {
+      console.log("Warning: Content-Length is 0 or null");
+    }
+
+    const filename = `${safeTitle}.${extension}`;
+    
+    // Stream the response body directly
+    const responseHeaders = new Headers({
+      ...corsHeaders,
+      "Content-Type": contentType,
+      "Content-Disposition": `attachment; filename="${filename}"`,
+    });
+
+    if (contentLength) {
+      responseHeaders.set("Content-Length", contentLength);
+    }
+
+    // Return the streamed response
+    return new Response(videoResponse.body, {
+      status: 200,
+      headers: responseHeaders,
+    });
 
   } catch (error) {
     console.error("Error:", error);

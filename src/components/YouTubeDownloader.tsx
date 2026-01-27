@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Link, Loader2, AlertCircle, Youtube, ExternalLink, CheckCircle2 } from "lucide-react";
+import { Download, Link, Loader2, AlertCircle, Youtube, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -28,9 +28,15 @@ export const YouTubeDownloader = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [resolution, setResolution] = useState("1080p");
   const [includeAudio, setIncludeAudio] = useState(true);
-  const [showServices, setShowServices] = useState(false);
   const { toast } = useToast();
-  const { downloadVideo, isDownloading, progress, error: downloadError, downloadServices, openDownloadService } = useYouTubeDownload();
+  const { 
+    downloadVideo, 
+    isDownloading, 
+    progress, 
+    error: downloadError, 
+    downloadedSize,
+    formatFileSize 
+  } = useYouTubeDownload();
 
   const handleUrlSubmit = () => {
     if (!url.trim()) {
@@ -53,7 +59,6 @@ export const YouTubeDownloader = () => {
     }
 
     setIsLoading(true);
-    setShowServices(false);
     setTimeout(() => {
       setVideoId(id);
       setIsLoading(false);
@@ -67,10 +72,11 @@ export const YouTubeDownloader = () => {
     const result = await downloadVideo(url, resolution, audioOnly);
 
     if (result.success) {
-      setShowServices(true);
       toast({
-        title: "Serviço de download aberto!",
-        description: "Escolha a qualidade desejada no site que foi aberto.",
+        title: "Download concluído!",
+        description: result.fileSize 
+          ? `Arquivo baixado: ${formatFileSize(result.fileSize)}`
+          : "O arquivo foi salvo com sucesso.",
       });
     } else {
       toast({
@@ -86,7 +92,15 @@ export const YouTubeDownloader = () => {
     setVideoId(null);
     setResolution("1080p");
     setIncludeAudio(true);
-    setShowServices(false);
+  };
+
+  const getProgressText = () => {
+    if (progress < 30) return "Iniciando...";
+    if (progress < 50) return "Conectando ao servidor...";
+    if (progress < 60) return "Preparando download...";
+    if (progress < 95) return `Baixando... ${formatFileSize(downloadedSize)}`;
+    if (progress < 100) return "Finalizando...";
+    return "Concluído!";
   };
 
   return (
@@ -161,40 +175,11 @@ export const YouTubeDownloader = () => {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">
-                      {progress < 60 ? "Processando..." : "Abrindo serviço..."}
+                      {getProgressText()}
                     </span>
                     <span className="text-primary font-medium">{Math.round(progress)}%</span>
                   </div>
                   <Progress value={progress} className="h-2" />
-                </div>
-              )}
-
-              {/* Download services */}
-              {showServices && downloadServices.length > 0 && (
-                <div className="space-y-3">
-                  <div className="flex items-start gap-3 p-4 rounded-xl bg-green-500/10 border border-green-500/30">
-                    <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0 mt-0.5" />
-                    <div className="text-sm text-muted-foreground flex-1">
-                      <p className="font-medium text-foreground mb-2">Serviços de download disponíveis</p>
-                      <p className="mb-3">
-                        Um serviço foi aberto em nova aba. Se não funcionou, tente uma das alternativas:
-                      </p>
-                      <div className="flex flex-wrap gap-2">
-                        {downloadServices.map((service) => (
-                          <Button
-                            key={service.name}
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openDownloadService(service.url)}
-                            className="gap-2"
-                          >
-                            <ExternalLink className="w-4 h-4" />
-                            {service.name}
-                          </Button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -210,13 +195,13 @@ export const YouTubeDownloader = () => {
               )}
 
               {/* Info state */}
-              {!isDownloading && !downloadError && !showServices && (
+              {!isDownloading && !downloadError && (
                 <div className="flex items-start gap-3 p-4 rounded-xl bg-primary/10 border border-primary/30">
                   <CheckCircle2 className="w-5 h-5 text-primary shrink-0 mt-0.5" />
                   <div className="text-sm text-muted-foreground">
                     <p className="font-medium text-foreground mb-1">Pronto para download</p>
                     <p>
-                      Clique no botão abaixo. Um serviço de download será aberto em nova aba onde você pode escolher a qualidade.
+                      O download será feito diretamente. O arquivo será salvo automaticamente.
                     </p>
                   </div>
                 </div>
@@ -242,7 +227,7 @@ export const YouTubeDownloader = () => {
                   ) : (
                     <Download className="w-5 h-5" />
                   )}
-                  {isDownloading ? "Processando..." : `Baixar ${resolution}`}
+                  {isDownloading ? "Baixando..." : `Baixar ${resolution}`}
                 </Button>
               </div>
             </div>
