@@ -8,7 +8,20 @@ const corsHeaders = {
 interface DownloadRequest {
   url: string;
   audioOnly?: boolean;
+  quality?: string;
 }
+
+// List of public Cobalt API instances (from instances.cobalt.best)
+const COBALT_INSTANCES = [
+  "https://cobalt-backend.canine.tools",
+  "https://cobalt-api.meowing.de",
+  "https://cobalt-api.kwiatekmiki.com",
+  "https://kityune.imput.net",
+  "https://nachos.imput.net",
+  "https://sunny.imput.net",
+  "https://blossom.imput.net",
+  "https://capi.3kh0.net",
+];
 
 // Extract video ID from various YouTube URL formats
 function extractVideoId(url: string): string | null {
@@ -43,43 +56,113 @@ async function getVideoInfo(videoId: string): Promise<{ title: string; author: s
   return null;
 }
 
-// Generate download service URLs - these are reliable external services
-function getDownloadServices(videoId: string, audioOnly: boolean): Array<{name: string; url: string; description: string}> {
-  const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+// Map quality to Cobalt's videoQuality format
+function mapQuality(quality?: string): string {
+  if (!quality) return "1080";
   
-  const services = [
-    {
-      name: "Ummy Video",
-      url: `https://ummy.net/pt/youtube-video-downloader/?url=${encodeURIComponent(youtubeUrl)}`,
-      description: "Rápido e sem anúncios",
-    },
-    {
-      name: "SnapSave",
-      url: `https://snapsave.io/pt?url=${encodeURIComponent(youtubeUrl)}`,
-      description: "Download em várias qualidades",
-    },
-    {
-      name: "10downloader",
-      url: `https://10downloader.com/download?v=${encodeURIComponent(youtubeUrl)}`,
-      description: "Simples e direto",
-    },
-    {
-      name: "SaveTube",
-      url: `https://savetube.io/pt/youtube-video-downloader?url=${encodeURIComponent(youtubeUrl)}`,
-      description: "Múltiplas resoluções",
-    },
-  ];
+  const qualityMap: Record<string, string> = {
+    "360p": "360",
+    "480p": "480",
+    "720p": "720",
+    "1080p": "1080",
+    "1440p": "1440",
+    "2160p": "2160",
+    "4k": "2160",
+    "max": "max",
+  };
+  
+  return qualityMap[quality.toLowerCase()] || "1080";
+}
 
-  if (audioOnly) {
-    // Add MP3-specific services at the beginning for audio
-    services.unshift({
-      name: "MP3Download",
-      url: `https://mp3download.to/pt/?url=${encodeURIComponent(youtubeUrl)}`,
-      description: "Especializado em MP3",
+// Try to get download URL from a Cobalt instance
+async function tryInstance(
+  instance: string,
+  youtubeUrl: string,
+  audioOnly: boolean,
+  quality: string
+): Promise<{ success: boolean; url?: string; filename?: string; error?: string }> {
+  try {
+    console.log(`Trying instance: ${instance}`);
+    
+    const requestBody: Record<string, unknown> = {
+      url: youtubeUrl,
+      videoQuality: quality,
+      audioFormat: "mp3",
+      audioBitrate: "320",
+      filenameStyle: "pretty",
+      youtubeVideoCodec: "h264",
+    };
+
+    if (audioOnly) {
+      requestBody.downloadMode = "audio";
+    }
+
+    const response = await fetch(instance, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
     });
-  }
 
-  return services;
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log(`Instance ${instance} returned error: ${response.status} - ${errorText}`);
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+
+    const data = await response.json();
+    console.log(`Instance ${instance} response:`, JSON.stringify(data));
+
+    // Handle different response statuses
+    if (data.status === "tunnel" || data.status === "redirect") {
+      return {
+        success: true,
+        url: data.url,
+        filename: data.filename,
+      };
+    }
+
+    if (data.status === "picker" && data.picker && data.picker.length > 0) {
+      // Return the first available option
+      const firstOption = data.picker[0];
+      return {
+        success: true,
+        url: firstOption.url,
+        filename: data.filename || "video",
+      };
+    }
+
+    if (data.status === "local-processing" && data.tunnel && data.tunnel.length > 0) {
+      // For local processing, return the first tunnel URL
+      return {
+        success: true,
+        url: data.tunnel[0],
+        filename: data.output?.filename || "video",
+      };
+    }
+
+    if (data.status === "error") {
+      console.log(`Instance ${instance} returned error status:`, data.error);
+      return { success: false, error: data.error?.code || "Unknown error" };
+    }
+
+    // If we got a URL directly (some older API versions)
+    if (data.url) {
+      return {
+        success: true,
+        url: data.url,
+        filename: data.filename,
+      };
+    }
+
+    return { success: false, error: "Unknown response format" };
+
+  } catch (e) {
+    console.log(`Instance ${instance} failed with exception:`, e);
+    return { success: false, error: e instanceof Error ? e.message : "Network error" };
+  }
 }
 
 serve(async (req) => {
@@ -89,7 +172,7 @@ serve(async (req) => {
 
   try {
     const body: DownloadRequest = await req.json();
-    const { url, audioOnly = false } = body;
+    const { url, audioOnly = false, quality } = body;
 
     if (!url) {
       return new Response(
@@ -98,7 +181,7 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Processing URL: ${url}, audioOnly: ${audioOnly}`);
+    console.log(`Processing URL: ${url}, audioOnly: ${audioOnly}, quality: ${quality}`);
 
     const videoId = extractVideoId(url);
     
@@ -109,22 +192,69 @@ serve(async (req) => {
       );
     }
 
+    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const mappedQuality = mapQuality(quality);
+
     // Get video info for display
     const videoInfo = await getVideoInfo(videoId);
-    
-    // Get download service URLs
-    const downloadServices = getDownloadServices(videoId, audioOnly);
+    console.log(`Video info: ${videoInfo?.title || "unknown"}`);
 
-    console.log(`Returning ${downloadServices.length} download services for: ${videoInfo?.title || videoId}`);
+    // Try each Cobalt instance until one works
+    let lastError = "";
+    for (const instance of COBALT_INSTANCES) {
+      const result = await tryInstance(instance, youtubeUrl, audioOnly, mappedQuality);
+      
+      if (result.success && result.url) {
+        console.log(`Success! Got download URL from ${instance}`);
+        
+        return new Response(
+          JSON.stringify({
+            success: true,
+            videoId,
+            title: videoInfo?.title || "Vídeo do YouTube",
+            author: videoInfo?.author || "",
+            thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+            downloadUrl: result.url,
+            filename: result.filename || `${videoInfo?.title || videoId}.${audioOnly ? "mp3" : "mp4"}`,
+            source: instance,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      lastError = result.error || "Unknown error";
+    }
+
+    // If all instances failed, return fallback services
+    console.log("All Cobalt instances failed, returning fallback services");
+    
+    const fallbackServices = [
+      {
+        name: "Cobalt.tools",
+        url: `https://cobalt.tools/?u=${encodeURIComponent(youtubeUrl)}`,
+        description: "Site oficial do Cobalt - cole o link e baixe",
+      },
+      {
+        name: "Y2Mate",
+        url: `https://www.y2mate.com/youtube/${videoId}`,
+        description: "Download em várias qualidades",
+      },
+      {
+        name: "SaveFrom",
+        url: `https://en.savefrom.net/1-youtube-video-downloader-438/#url=${encodeURIComponent(youtubeUrl)}`,
+        description: "Serviço alternativo de download",
+      },
+    ];
 
     return new Response(
       JSON.stringify({
-        success: true,
+        success: false,
         videoId,
         title: videoInfo?.title || "Vídeo do YouTube",
         author: videoInfo?.author || "",
         thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-        downloadServices,
+        error: `APIs indisponíveis: ${lastError}`,
+        fallbackServices,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
