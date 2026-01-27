@@ -7,7 +7,6 @@ const corsHeaders = {
 
 interface DownloadRequest {
   url: string;
-  quality?: string;
   audioOnly?: boolean;
 }
 
@@ -44,36 +43,39 @@ async function getVideoInfo(videoId: string): Promise<{ title: string; author: s
   return null;
 }
 
-// Generate external service URLs - these are reliable and always work
+// Generate download service URLs - these are reliable external services
 function getDownloadServices(videoId: string, audioOnly: boolean): Array<{name: string; url: string; description: string}> {
+  const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
+  
   const services = [
     {
-      name: "SSYouTube",
-      url: `https://ssyoutube.com/watch?v=${videoId}`,
-      description: "Rápido e confiável",
+      name: "SaveFrom.net",
+      url: `https://en.savefrom.net/1-youtube-video-downloader-438/#url=${encodeURIComponent(youtubeUrl)}`,
+      description: "Serviço confiável com múltiplas qualidades",
     },
     {
       name: "Y2Mate",
       url: `https://www.y2mate.com/youtube/${videoId}`,
-      description: "Múltiplas qualidades",
+      description: "Download rápido em várias resoluções",
     },
     {
-      name: "SaveFrom",
-      url: `https://en.savefrom.net/1-youtube-video-downloader-438/#url=https://youtube.com/watch?v=${videoId}`,
-      description: "Fácil de usar",
+      name: "SSYouTube",
+      url: `https://ssyoutube.com/watch?v=${videoId}`,
+      description: "Adicione 'ss' antes de youtube.com",
     },
     {
       name: "9xBuddy",
-      url: `https://9xbuddy.com/process?url=https://youtube.com/watch?v=${videoId}`,
+      url: `https://9xbuddy.com/process?url=${encodeURIComponent(youtubeUrl)}`,
       description: "Alternativa estável",
     },
   ];
 
   if (audioOnly) {
-    services.push({
-      name: "YTMP3",
-      url: `https://ytmp3.cc/youtube-to-mp3/?url=https://youtube.com/watch?v=${videoId}`,
-      description: "Especializado em MP3",
+    // Add MP3-specific services at the beginning for audio
+    services.unshift({
+      name: "YTMP3.cc",
+      url: `https://ytmp3.cc/youtube-to-mp3/?url=${encodeURIComponent(youtubeUrl)}`,
+      description: "Especializado em conversão para MP3",
     });
   }
 
@@ -91,12 +93,12 @@ serve(async (req) => {
 
     if (!url) {
       return new Response(
-        JSON.stringify({ error: "URL is required" }),
+        JSON.stringify({ error: "URL é obrigatória" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`Processing: ${url}, audioOnly: ${audioOnly}`);
+    console.log(`Processing URL: ${url}, audioOnly: ${audioOnly}`);
 
     const videoId = extractVideoId(url);
     
@@ -113,15 +115,16 @@ serve(async (req) => {
     // Get download service URLs
     const downloadServices = getDownloadServices(videoId, audioOnly);
 
-    console.log(`Returning ${downloadServices.length} download services for video: ${videoInfo?.title || videoId}`);
+    console.log(`Returning ${downloadServices.length} download services for: ${videoInfo?.title || videoId}`);
 
     return new Response(
       JSON.stringify({
         success: true,
-        videoId: videoId,
+        videoId,
         title: videoInfo?.title || "Vídeo do YouTube",
         author: videoInfo?.author || "",
-        downloadServices: downloadServices,
+        thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+        downloadServices,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
