@@ -45,37 +45,37 @@ async function getVideoInfo(videoId: string): Promise<{ title: string; author: s
 
 // Generate download service URLs - these are reliable external services
 function getDownloadServices(videoId: string, audioOnly: boolean): Array<{name: string; url: string; description: string}> {
-  const youtubeUrl = `https://youtube.com/watch?v=${videoId}`;
+  const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
   
   const services = [
     {
-      name: "SaveFrom.net",
-      url: `https://en.savefrom.net/1-youtube-video-downloader-438/#url=${encodeURIComponent(youtubeUrl)}`,
-      description: "Serviço confiável com múltiplas qualidades",
+      name: "Ummy Video",
+      url: `https://ummy.net/pt/youtube-video-downloader/?url=${encodeURIComponent(youtubeUrl)}`,
+      description: "Rápido e sem anúncios",
     },
     {
-      name: "Y2Mate",
-      url: `https://www.y2mate.com/youtube/${videoId}`,
-      description: "Download rápido em várias resoluções",
+      name: "SnapSave",
+      url: `https://snapsave.io/pt?url=${encodeURIComponent(youtubeUrl)}`,
+      description: "Download em várias qualidades",
     },
     {
-      name: "SSYouTube",
-      url: `https://ssyoutube.com/watch?v=${videoId}`,
-      description: "Adicione 'ss' antes de youtube.com",
+      name: "10downloader",
+      url: `https://10downloader.com/download?v=${encodeURIComponent(youtubeUrl)}`,
+      description: "Simples e direto",
     },
     {
-      name: "9xBuddy",
-      url: `https://9xbuddy.com/process?url=${encodeURIComponent(youtubeUrl)}`,
-      description: "Alternativa estável",
+      name: "SaveTube",
+      url: `https://savetube.io/pt/youtube-video-downloader?url=${encodeURIComponent(youtubeUrl)}`,
+      description: "Múltiplas resoluções",
     },
   ];
 
   if (audioOnly) {
     // Add MP3-specific services at the beginning for audio
     services.unshift({
-      name: "YTMP3.cc",
-      url: `https://ytmp3.cc/youtube-to-mp3/?url=${encodeURIComponent(youtubeUrl)}`,
-      description: "Especializado em conversão para MP3",
+      name: "MP3Download",
+      url: `https://mp3download.to/pt/?url=${encodeURIComponent(youtubeUrl)}`,
+      description: "Especializado em MP3",
     });
   }
 
