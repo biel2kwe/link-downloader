@@ -44,6 +44,105 @@ async function getVideoInfo(videoId: string): Promise<{ title: string; author: s
   return null;
 }
 
+// List of working Cobalt API instances (ordered by reliability)
+const COBALT_INSTANCES = [
+  "https://cobalt-api.meowing.de",
+  "https://cobalt-api.kwiatekmiki.com",
+  "https://cobalt-backend.canine.tools",
+  "https://kityune.imput.net",
+  "https://nachos.imput.net",
+  "https://sunny.imput.net",
+  "https://blossom.imput.net",
+  "https://capi.3kh0.net",
+];
+
+// Try to get download URL from Cobalt API
+async function getCobaltDownload(
+  youtubeUrl: string,
+  quality: string,
+  audioOnly: boolean
+): Promise<{ url: string; filename?: string } | null> {
+  
+  const qualityMap: Record<string, string> = {
+    "2160": "2160",
+    "1080": "1080",
+    "720": "720",
+    "480": "480",
+    "360": "360",
+  };
+
+  const videoQuality = qualityMap[quality] || "720";
+
+  for (const instance of COBALT_INSTANCES) {
+    try {
+      console.log(`Trying Cobalt instance: ${instance}`);
+      
+      const response = await fetch(`${instance}/`, {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          url: youtubeUrl,
+          videoQuality: videoQuality,
+          audioFormat: "mp3",
+          filenameStyle: "pretty",
+          downloadMode: audioOnly ? "audio" : "auto",
+        }),
+      });
+
+      if (!response.ok) {
+        console.log(`Instance ${instance} returned ${response.status}`);
+        continue;
+      }
+
+      const data = await response.json();
+      console.log(`Cobalt response from ${instance}:`, JSON.stringify(data));
+
+      // Handle different response formats
+      if (data.status === "tunnel" || data.status === "redirect") {
+        const downloadUrl = data.url;
+        if (downloadUrl) {
+          console.log(`Got download URL from ${instance}: ${downloadUrl.substring(0, 100)}...`);
+          return { 
+            url: downloadUrl, 
+            filename: data.filename 
+          };
+        }
+      }
+
+      // Handle picker response (multiple formats available)
+      if (data.status === "picker" && data.picker && data.picker.length > 0) {
+        // Get the first available option
+        const firstOption = data.picker[0];
+        if (firstOption.url) {
+          console.log(`Got picker URL from ${instance}`);
+          return { 
+            url: firstOption.url, 
+            filename: data.filename 
+          };
+        }
+      }
+
+      // Direct URL response
+      if (data.url) {
+        console.log(`Got direct URL from ${instance}`);
+        return { 
+          url: data.url, 
+          filename: data.filename 
+        };
+      }
+
+    } catch (error) {
+      console.log(`Error with ${instance}:`, error);
+      continue;
+    }
+  }
+
+  return null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -78,19 +177,36 @@ serve(async (req) => {
       ?.substring(0, 50)
       ?.trim() || "video";
 
-    // Since cobalt tunnel doesn't work reliably, we'll provide direct download services
-    // that the user can use in a new tab
+    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Option 1: Use ssyoutube (works well for downloads)
-    const ssyoutubeUrl = `https://ssyoutube.com/watch?v=${videoId}`;
-    
-    // Option 2: Use y2mate
-    const y2mateUrl = `https://www.y2mate.com/youtube/${videoId}`;
-    
-    // Option 3: Use savefrom
-    const savefromUrl = `https://en.savefrom.net/1-youtube-video-downloader-${videoId}`;
+    // Try to get direct download URL from Cobalt
+    const cobaltResult = await getCobaltDownload(youtubeUrl, quality, audioOnly);
 
-    console.log(`Providing download options for video: ${videoId}`);
+    if (cobaltResult && cobaltResult.url) {
+      console.log(`Successfully got download URL`);
+      
+      return new Response(
+        JSON.stringify({
+          success: true,
+          videoId: videoId,
+          title: safeTitle,
+          author: videoInfo?.author || "Unknown",
+          downloadUrl: cobaltResult.url,
+          filename: cobaltResult.filename || `${safeTitle}.${audioOnly ? "mp3" : "mp4"}`,
+          quality: quality,
+          audioOnly: audioOnly,
+          method: "direct",
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Fallback: provide download service links
+    console.log(`Cobalt failed, providing fallback services`);
+    
+    const ssyoutubeUrl = `https://ssyoutube.com/watch?v=${videoId}`;
+    const y2mateUrl = `https://www.y2mate.com/youtube/${videoId}`;
+    const savefromUrl = `https://en.savefrom.net/1-youtube-video-downloader-${videoId}`;
 
     return new Response(
       JSON.stringify({
@@ -98,6 +214,7 @@ serve(async (req) => {
         videoId: videoId,
         title: safeTitle,
         author: videoInfo?.author || "Unknown",
+        downloadUrl: ssyoutubeUrl,
         downloadServices: [
           {
             name: "SSYoutube",
@@ -115,11 +232,10 @@ serve(async (req) => {
             description: "Alternativa confiável",
           },
         ],
-        // Primary download URL
-        downloadUrl: ssyoutubeUrl,
         filename: `${safeTitle}.${audioOnly ? "mp3" : "mp4"}`,
         quality: quality,
         audioOnly: audioOnly,
+        method: "fallback",
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
