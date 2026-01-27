@@ -33,9 +33,7 @@ export const YouTubeDownloader = () => {
     downloadVideo, 
     isDownloading, 
     progress, 
-    error: downloadError, 
-    downloadedSize,
-    formatFileSize 
+    error: downloadError,
   } = useYouTubeDownload();
 
   const handleUrlSubmit = () => {
@@ -73,10 +71,8 @@ export const YouTubeDownloader = () => {
 
     if (result.success) {
       toast({
-        title: "Download concluído!",
-        description: result.fileSize 
-          ? `Arquivo baixado: ${formatFileSize(result.fileSize)}`
-          : "O arquivo foi salvo com sucesso.",
+        title: "Download iniciado!",
+        description: "O download foi aberto em uma nova aba. Aguarde o navegador processar.",
       });
     } else {
       toast({
@@ -95,11 +91,10 @@ export const YouTubeDownloader = () => {
   };
 
   const getProgressText = () => {
-    if (progress < 30) return "Iniciando...";
-    if (progress < 50) return "Conectando ao servidor...";
-    if (progress < 60) return "Preparando download...";
-    if (progress < 95) return `Baixando... ${formatFileSize(downloadedSize)}`;
-    if (progress < 100) return "Finalizando...";
+    if (progress < 40) return "Conectando...";
+    if (progress < 60) return "Buscando link...";
+    if (progress < 80) return "Preparando...";
+    if (progress < 100) return "Abrindo download...";
     return "Concluído!";
   };
 

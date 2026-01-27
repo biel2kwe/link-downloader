@@ -224,54 +224,22 @@ serve(async (req) => {
       );
     }
 
-    // Stream the file directly through the edge function
-    console.log(`Fetching video from: ${cobaltResult.url.substring(0, 100)}...`);
-    
-    const videoResponse = await fetch(cobaltResult.url, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-    });
-
-    if (!videoResponse.ok) {
-      console.log(`Failed to fetch video: ${videoResponse.status}`);
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: `Erro ao baixar o vídeo: ${videoResponse.status}`,
-        }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const contentLength = videoResponse.headers.get("content-length");
-    const contentType = videoResponse.headers.get("content-type") || (audioOnly ? "audio/mpeg" : "video/mp4");
-    
-    console.log(`Video response - Content-Length: ${contentLength}, Content-Type: ${contentType}`);
-
-    // Check if we got valid content
-    if (contentLength === "0" || contentLength === null) {
-      console.log("Warning: Content-Length is 0 or null");
-    }
-
+    // Return the download URL directly - let the browser handle it
+    // Tunnel URLs don't work with server-side fetch (return 0 bytes)
     const filename = `${safeTitle}.${extension}`;
     
-    // Stream the response body directly
-    const responseHeaders = new Headers({
-      ...corsHeaders,
-      "Content-Type": contentType,
-      "Content-Disposition": `attachment; filename="${filename}"`,
-    });
-
-    if (contentLength) {
-      responseHeaders.set("Content-Length", contentLength);
-    }
-
-    // Return the streamed response
-    return new Response(videoResponse.body, {
-      status: 200,
-      headers: responseHeaders,
-    });
+    console.log(`Returning download URL for browser: ${cobaltResult.url.substring(0, 100)}...`);
+    
+    return new Response(
+      JSON.stringify({
+        success: true,
+        downloadUrl: cobaltResult.url,
+        filename: filename,
+        title: videoInfo?.title || "video",
+        isTunnel: cobaltResult.isTunnel,
+      }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
 
   } catch (error) {
     console.error("Error:", error);
