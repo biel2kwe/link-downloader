@@ -9,7 +9,6 @@ interface DownloadRequest {
   url: string;
   quality?: string;
   audioOnly?: boolean;
-  action?: "info" | "download";
 }
 
 // Extract video ID from various YouTube URL formats
@@ -45,9 +44,8 @@ async function getVideoInfo(videoId: string): Promise<{ title: string; author: s
   return null;
 }
 
-// Sanitize filename for Content-Disposition header
+// Sanitize filename
 function sanitizeFilename(filename: string): string {
-  // Remove or replace problematic characters
   return filename
     .replace(/[^\w\s.-]/g, '')
     .replace(/\s+/g, '_')
@@ -55,24 +53,18 @@ function sanitizeFilename(filename: string): string {
     .trim() || 'video';
 }
 
-// List of working Cobalt API instances
+// Cobalt instances - prioritize ones that return redirect URLs
 const COBALT_INSTANCES = [
+  "https://api.cobalt.tools",
   "https://cobalt-api.kwiatekmiki.com",
-  "https://cobalt-api.meowing.de",
-  "https://cobalt-backend.canine.tools",
-  "https://kityune.imput.net",
-  "https://nachos.imput.net",
-  "https://sunny.imput.net",
-  "https://blossom.imput.net",
-  "https://capi.3kh0.net",
 ];
 
-// Get download URL from Cobalt API
-async function getCobaltDownload(
+// Get download URL from Cobalt API - ONLY accept redirect URLs
+async function getCobaltRedirectUrl(
   youtubeUrl: string,
   quality: string,
   audioOnly: boolean
-): Promise<{ url: string; filename?: string; isTunnel: boolean } | null> {
+): Promise<{ url: string; filename?: string } | null> {
   
   const qualityMap: Record<string, string> = {
     "2160": "2160",
@@ -109,48 +101,34 @@ async function getCobaltDownload(
       }
 
       const data = await response.json();
-      console.log(`Cobalt response from ${instance}:`, JSON.stringify(data).substring(0, 200));
+      console.log(`Cobalt response from ${instance}:`, JSON.stringify(data).substring(0, 300));
 
-      // Handle tunnel status - we can proxy these server-side!
-      if (data.status === "tunnel" && data.url) {
-        console.log(`Got tunnel URL from ${instance} - will proxy server-side`);
-        return { 
-          url: data.url, 
-          filename: data.filename,
-          isTunnel: true
-        };
-      }
-
-      // Handle redirect status - direct URLs
+      // ONLY accept "redirect" status - these work with direct browser download
       if (data.status === "redirect" && data.url) {
-        console.log(`Got redirect URL from ${instance}`);
+        console.log(`Got REDIRECT URL from ${instance} - this will work!`);
         return { 
           url: data.url, 
           filename: data.filename,
-          isTunnel: false
         };
       }
 
-      // Handle picker response
+      // Handle picker response - check if any have redirect URLs
       if (data.status === "picker" && data.picker && data.picker.length > 0) {
-        const firstOption = data.picker[0];
-        if (firstOption.url) {
-          console.log(`Got picker URL from ${instance}`);
-          return { 
-            url: firstOption.url, 
-            filename: data.filename,
-            isTunnel: false
-          };
+        for (const option of data.picker) {
+          if (option.url && !option.url.includes('/tunnel')) {
+            console.log(`Got picker URL from ${instance}`);
+            return { 
+              url: option.url, 
+              filename: data.filename,
+            };
+          }
         }
       }
 
-      // Direct URL response
-      if (data.url) {
-        return { 
-          url: data.url, 
-          filename: data.filename,
-          isTunnel: data.status === "tunnel"
-        };
+      // Skip tunnel URLs - they don't work with direct download
+      if (data.status === "tunnel") {
+        console.log(`Instance ${instance} returned tunnel URL - skipping (0 bytes issue)`);
+        continue;
       }
 
     } catch (error) {
@@ -162,6 +140,24 @@ async function getCobaltDownload(
   return null;
 }
 
+// Generate external service URLs as fallback
+function getExternalServiceUrls(videoId: string): Array<{name: string; url: string}> {
+  return [
+    {
+      name: "Y2Mate",
+      url: `https://www.y2mate.com/youtube/${videoId}`,
+    },
+    {
+      name: "SaveFrom",
+      url: `https://en.savefrom.net/1-youtube-video-downloader-438/#url=https://youtube.com/watch?v=${videoId}`,
+    },
+    {
+      name: "SSYouTube",
+      url: `https://ssyoutube.com/watch?v=${videoId}`,
+    },
+  ];
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -169,7 +165,7 @@ serve(async (req) => {
 
   try {
     const body: DownloadRequest = await req.json();
-    const { url, quality = "720", audioOnly = false, action = "download" } = body;
+    const { url, quality = "720", audioOnly = false } = body;
 
     if (!url) {
       return new Response(
@@ -178,7 +174,7 @@ serve(async (req) => {
       );
     }
 
-    console.log(`Processing: ${url}, quality: ${quality}, audioOnly: ${audioOnly}, action: ${action}`);
+    console.log(`Processing: ${url}, quality: ${quality}, audioOnly: ${audioOnly}`);
 
     const videoId = extractVideoId(url);
     
@@ -189,54 +185,44 @@ serve(async (req) => {
       );
     }
 
-    // Get video info for the title
+    // Get video info
     const videoInfo = await getVideoInfo(videoId);
     const safeTitle = sanitizeFilename(videoInfo?.title || "video");
     const extension = audioOnly ? "mp3" : "mp4";
+    const filename = `${safeTitle}.${extension}`;
 
     const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Get download URL from Cobalt
-    const cobaltResult = await getCobaltDownload(youtubeUrl, quality, audioOnly);
+    // Try to get a working redirect URL from Cobalt
+    const cobaltResult = await getCobaltRedirectUrl(youtubeUrl, quality, audioOnly);
 
-    if (!cobaltResult || !cobaltResult.url) {
-      console.log("Cobalt failed to return download URL");
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "Não foi possível obter o link de download. Tente novamente.",
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // If action is "info", just return the metadata
-    if (action === "info") {
+    if (cobaltResult && cobaltResult.url) {
+      console.log(`Success! Returning redirect URL: ${cobaltResult.url.substring(0, 100)}...`);
+      
       return new Response(
         JSON.stringify({
           success: true,
-          videoId: videoId,
+          downloadUrl: cobaltResult.url,
+          filename: filename,
           title: videoInfo?.title || "video",
-          author: videoInfo?.author || "Unknown",
-          hasDownload: true,
+          method: "direct",
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Return the download URL directly - let the browser handle it
-    // Tunnel URLs don't work with server-side fetch (return 0 bytes)
-    const filename = `${safeTitle}.${extension}`;
-    
-    console.log(`Returning download URL for browser: ${cobaltResult.url.substring(0, 100)}...`);
-    
+    // Fallback: return external service URLs
+    console.log("Cobalt failed to provide working URL, returning external services");
+    const externalServices = getExternalServiceUrls(videoId);
+
     return new Response(
       JSON.stringify({
         success: true,
-        downloadUrl: cobaltResult.url,
-        filename: filename,
+        method: "external",
         title: videoInfo?.title || "video",
-        isTunnel: cobaltResult.isTunnel,
+        filename: filename,
+        externalServices: externalServices,
+        message: "Use um dos serviços abaixo para baixar o vídeo",
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

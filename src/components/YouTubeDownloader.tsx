@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Link, Loader2, AlertCircle, Youtube, CheckCircle2 } from "lucide-react";
+import { Download, Link, Loader2, AlertCircle, Youtube, CheckCircle2, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -34,6 +34,8 @@ export const YouTubeDownloader = () => {
     isDownloading, 
     progress, 
     error: downloadError,
+    externalServices,
+    openExternalService,
   } = useYouTubeDownload();
 
   const handleUrlSubmit = () => {
@@ -70,10 +72,17 @@ export const YouTubeDownloader = () => {
     const result = await downloadVideo(url, resolution, audioOnly);
 
     if (result.success) {
-      toast({
-        title: "Download iniciado!",
-        description: "O download foi aberto em uma nova aba. Aguarde o navegador processar.",
-      });
+      if (result.method === "direct") {
+        toast({
+          title: "Download iniciado!",
+          description: "O download foi aberto em uma nova aba.",
+        });
+      } else if (result.method === "external") {
+        toast({
+          title: "Serviço externo aberto",
+          description: "Use o site que abriu para baixar o vídeo. Outras opções disponíveis abaixo.",
+        });
+      }
     } else {
       toast({
         title: "Erro no download",
@@ -93,7 +102,7 @@ export const YouTubeDownloader = () => {
   const getProgressText = () => {
     if (progress < 40) return "Conectando...";
     if (progress < 60) return "Buscando link...";
-    if (progress < 80) return "Preparando...";
+    if (progress < 80) return "Processando...";
     if (progress < 100) return "Abrindo download...";
     return "Concluído!";
   };
@@ -178,6 +187,29 @@ export const YouTubeDownloader = () => {
                 </div>
               )}
 
+              {/* External Services - shown when direct download not available */}
+              {externalServices.length > 0 && !isDownloading && (
+                <div className="space-y-3">
+                  <p className="text-sm text-muted-foreground">
+                    O primeiro serviço foi aberto. Caso não funcione, tente os outros:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {externalServices.map((service) => (
+                      <Button
+                        key={service.name}
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openExternalService(service.url)}
+                        className="gap-2"
+                      >
+                        <ExternalLink className="w-4 h-4" />
+                        {service.name}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Error state */}
               {downloadError && (
                 <div className="flex items-start gap-3 p-4 rounded-xl bg-destructive/10 border border-destructive/30">
@@ -189,14 +221,14 @@ export const YouTubeDownloader = () => {
                 </div>
               )}
 
-              {/* Info state */}
-              {!isDownloading && !downloadError && (
+              {/* Ready state */}
+              {!isDownloading && !downloadError && externalServices.length === 0 && (
                 <div className="flex items-start gap-3 p-4 rounded-xl bg-primary/10 border border-primary/30">
                   <CheckCircle2 className="w-5 h-5 text-primary shrink-0 mt-0.5" />
                   <div className="text-sm text-muted-foreground">
                     <p className="font-medium text-foreground mb-1">Pronto para download</p>
                     <p>
-                      O download será feito diretamente. O arquivo será salvo automaticamente.
+                      Clique em baixar e o download abrirá automaticamente.
                     </p>
                   </div>
                 </div>
@@ -222,7 +254,7 @@ export const YouTubeDownloader = () => {
                   ) : (
                     <Download className="w-5 h-5" />
                   )}
-                  {isDownloading ? "Baixando..." : `Baixar ${resolution}`}
+                  {isDownloading ? "Processando..." : `Baixar ${resolution}`}
                 </Button>
               </div>
             </div>
