@@ -11,16 +11,18 @@ interface DownloadRequest {
   quality?: string;
 }
 
-// List of public Cobalt API instances (from instances.cobalt.best)
-const COBALT_INSTANCES = [
-  "https://cobalt-backend.canine.tools",
-  "https://cobalt-api.meowing.de",
-  "https://cobalt-api.kwiatekmiki.com",
-  "https://kityune.imput.net",
-  "https://nachos.imput.net",
-  "https://sunny.imput.net",
-  "https://blossom.imput.net",
-  "https://capi.3kh0.net",
+// Public Invidious instances with API enabled
+const INVIDIOUS_INSTANCES = [
+  "https://inv.nadeko.net",
+  "https://invidious.private.coffee",
+  "https://iv.ggtyler.dev",
+  "https://invidious.protokolla.fi",
+  "https://invidious.perennialte.ch",
+  "https://yt.drgnz.club",
+  "https://invidious.darkness.services",
+  "https://invidious.einfachzocken.eu",
+  "https://invidious.privacyredirect.com",
+  "https://invidious.drgns.space",
 ];
 
 // Extract video ID from various YouTube URL formats
@@ -37,132 +39,148 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
-// Get video info from YouTube oEmbed
-async function getVideoInfo(videoId: string): Promise<{ title: string; author: string } | null> {
-  try {
-    const response = await fetch(
-      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
-    );
-    if (response.ok) {
-      const data = await response.json();
-      return {
-        title: data.title || "video",
-        author: data.author_name || "unknown",
-      };
-    }
-  } catch (e) {
-    console.log("Failed to get video info:", e);
-  }
-  return null;
-}
-
-// Map quality to Cobalt's videoQuality format
-function mapQuality(quality?: string): string {
-  if (!quality) return "1080";
-  
-  const qualityMap: Record<string, string> = {
-    "360p": "360",
-    "480p": "480",
-    "720p": "720",
-    "1080p": "1080",
-    "1440p": "1440",
-    "2160p": "2160",
-    "4k": "2160",
-    "max": "max",
-  };
-  
-  return qualityMap[quality.toLowerCase()] || "1080";
-}
-
-// Try to get download URL from a Cobalt instance
-async function tryInstance(
+// Get video info and streams from Invidious API
+async function getVideoFromInvidious(
   instance: string,
-  youtubeUrl: string,
-  audioOnly: boolean,
-  quality: string
-): Promise<{ success: boolean; url?: string; filename?: string; error?: string }> {
+  videoId: string
+): Promise<{
+  success: boolean;
+  title?: string;
+  author?: string;
+  formatStreams?: Array<{
+    url: string;
+    itag: string;
+    type: string;
+    quality: string;
+    container: string;
+    resolution?: string;
+  }>;
+  adaptiveFormats?: Array<{
+    url: string;
+    itag: string;
+    type: string;
+    bitrate: string;
+    container: string;
+    resolution?: string;
+    audioQuality?: string;
+    audioSampleRate?: string;
+  }>;
+  error?: string;
+}> {
   try {
-    console.log(`Trying instance: ${instance}`);
+    console.log(`Trying Invidious instance: ${instance}`);
     
-    const requestBody: Record<string, unknown> = {
-      url: youtubeUrl,
-      videoQuality: quality,
-      audioFormat: "mp3",
-      audioBitrate: "320",
-      filenameStyle: "pretty",
-      youtubeVideoCodec: "h264",
-    };
-
-    if (audioOnly) {
-      requestBody.downloadMode = "audio";
-    }
-
-    const response = await fetch(instance, {
-      method: "POST",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(requestBody),
-    });
+    const response = await fetch(
+      `${instance}/api/v1/videos/${videoId}?local=true`,
+      {
+        headers: {
+          "Accept": "application/json",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+      }
+    );
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.log(`Instance ${instance} returned error: ${response.status} - ${errorText}`);
+      console.log(`Instance ${instance} returned ${response.status}`);
       return { success: false, error: `HTTP ${response.status}` };
     }
 
     const data = await response.json();
-    console.log(`Instance ${instance} response:`, JSON.stringify(data));
-
-    // Handle different response statuses
-    if (data.status === "tunnel" || data.status === "redirect") {
-      return {
-        success: true,
-        url: data.url,
-        filename: data.filename,
-      };
+    
+    if (data.error) {
+      console.log(`Instance ${instance} returned error:`, data.error);
+      return { success: false, error: data.error };
     }
 
-    if (data.status === "picker" && data.picker && data.picker.length > 0) {
-      // Return the first available option
-      const firstOption = data.picker[0];
-      return {
-        success: true,
-        url: firstOption.url,
-        filename: data.filename || "video",
-      };
-    }
-
-    if (data.status === "local-processing" && data.tunnel && data.tunnel.length > 0) {
-      // For local processing, return the first tunnel URL
-      return {
-        success: true,
-        url: data.tunnel[0],
-        filename: data.output?.filename || "video",
-      };
-    }
-
-    if (data.status === "error") {
-      console.log(`Instance ${instance} returned error status:`, data.error);
-      return { success: false, error: data.error?.code || "Unknown error" };
-    }
-
-    // If we got a URL directly (some older API versions)
-    if (data.url) {
-      return {
-        success: true,
-        url: data.url,
-        filename: data.filename,
-      };
-    }
-
-    return { success: false, error: "Unknown response format" };
-
+    return {
+      success: true,
+      title: data.title,
+      author: data.author,
+      formatStreams: data.formatStreams || [],
+      adaptiveFormats: data.adaptiveFormats || [],
+    };
   } catch (e) {
-    console.log(`Instance ${instance} failed with exception:`, e);
+    console.log(`Instance ${instance} failed:`, e);
     return { success: false, error: e instanceof Error ? e.message : "Network error" };
   }
+}
+
+// Find best video stream based on quality preference
+function findBestVideoStream(
+  formatStreams: Array<any>,
+  adaptiveFormats: Array<any>,
+  preferredQuality?: string
+): { url: string; quality: string; type: string } | null {
+  // Priority order for quality
+  const qualityPriority = ["1080p", "720p", "480p", "360p", "240p", "144p"];
+  
+  if (preferredQuality) {
+    // Try to find the preferred quality first
+    const normalizedPref = preferredQuality.replace("p", "");
+    qualityPriority.unshift(`${normalizedPref}p`);
+  }
+
+  // First try formatStreams (combined audio+video, easier to play)
+  for (const quality of qualityPriority) {
+    const stream = formatStreams.find((s: any) => 
+      s.resolution === quality || s.qualityLabel === quality || s.quality === quality
+    );
+    if (stream?.url) {
+      return {
+        url: stream.url,
+        quality: stream.resolution || stream.qualityLabel || stream.quality || "unknown",
+        type: stream.type || "video/mp4",
+      };
+    }
+  }
+
+  // If no format streams, try adaptive formats (video only)
+  for (const quality of qualityPriority) {
+    const stream = adaptiveFormats.find((s: any) => 
+      s.type?.startsWith("video/") && 
+      (s.resolution === quality || s.qualityLabel === quality)
+    );
+    if (stream?.url) {
+      return {
+        url: stream.url,
+        quality: stream.resolution || stream.qualityLabel || "unknown",
+        type: stream.type || "video/mp4",
+      };
+    }
+  }
+
+  // Fallback: return first available video stream
+  const firstVideo = formatStreams[0] || adaptiveFormats.find((s: any) => s.type?.startsWith("video/"));
+  if (firstVideo?.url) {
+    return {
+      url: firstVideo.url,
+      quality: firstVideo.resolution || firstVideo.qualityLabel || firstVideo.quality || "unknown",
+      type: firstVideo.type || "video/mp4",
+    };
+  }
+
+  return null;
+}
+
+// Find best audio stream
+function findBestAudioStream(
+  adaptiveFormats: Array<any>
+): { url: string; quality: string; type: string } | null {
+  // Find audio streams sorted by bitrate (highest first)
+  const audioStreams = adaptiveFormats
+    .filter((s: any) => s.type?.startsWith("audio/"))
+    .sort((a: any, b: any) => (parseInt(b.bitrate) || 0) - (parseInt(a.bitrate) || 0));
+
+  if (audioStreams.length > 0) {
+    const best = audioStreams[0];
+    return {
+      url: best.url,
+      quality: best.audioQuality || `${Math.round(parseInt(best.bitrate) / 1000)}kbps` || "unknown",
+      type: best.type || "audio/mp4",
+    };
+  }
+
+  return null;
 }
 
 serve(async (req) => {
@@ -192,47 +210,82 @@ serve(async (req) => {
       );
     }
 
-    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const mappedQuality = mapQuality(quality);
-
-    // Get video info for display
-    const videoInfo = await getVideoInfo(videoId);
-    console.log(`Video info: ${videoInfo?.title || "unknown"}`);
-
-    // Try each Cobalt instance until one works
+    // Try each Invidious instance until one works
     let lastError = "";
-    for (const instance of COBALT_INSTANCES) {
-      const result = await tryInstance(instance, youtubeUrl, audioOnly, mappedQuality);
+    for (const instance of INVIDIOUS_INSTANCES) {
+      const result = await getVideoFromInvidious(instance, videoId);
       
-      if (result.success && result.url) {
-        console.log(`Success! Got download URL from ${instance}`);
+      if (result.success) {
+        console.log(`Got video info from ${instance}: "${result.title}"`);
         
-        return new Response(
-          JSON.stringify({
-            success: true,
-            videoId,
-            title: videoInfo?.title || "Vídeo do YouTube",
-            author: videoInfo?.author || "",
-            thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-            downloadUrl: result.url,
-            filename: result.filename || `${videoInfo?.title || videoId}.${audioOnly ? "mp3" : "mp4"}`,
-            source: instance,
-          }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        let stream;
+        if (audioOnly) {
+          stream = findBestAudioStream(result.adaptiveFormats || []);
+        } else {
+          stream = findBestVideoStream(
+            result.formatStreams || [],
+            result.adaptiveFormats || [],
+            quality
+          );
+        }
+
+        if (stream) {
+          console.log(`Found stream: ${stream.quality}, type: ${stream.type}`);
+          
+          // Determine file extension
+          const extension = audioOnly ? "mp3" : (stream.type.includes("webm") ? "webm" : "mp4");
+          const safeTitle = (result.title || videoId)
+            .replace(/[^\w\s-]/g, '')
+            .replace(/\s+/g, '_')
+            .substring(0, 100);
+          
+          return new Response(
+            JSON.stringify({
+              success: true,
+              videoId,
+              title: result.title || "Vídeo do YouTube",
+              author: result.author || "",
+              thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+              downloadUrl: stream.url,
+              quality: stream.quality,
+              type: stream.type,
+              filename: `${safeTitle}.${extension}`,
+              source: instance,
+            }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        } else {
+          console.log(`No suitable stream found from ${instance}`);
+          lastError = "Nenhum stream disponível";
+        }
+      } else {
+        lastError = result.error || "Unknown error";
       }
-      
-      lastError = result.error || "Unknown error";
     }
 
     // If all instances failed, return fallback services
-    console.log("All Cobalt instances failed, returning fallback services");
+    console.log("All Invidious instances failed, returning fallback services");
     
+    // Get video title from oEmbed as fallback
+    let videoTitle = "Vídeo do YouTube";
+    try {
+      const oembedResponse = await fetch(
+        `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
+      );
+      if (oembedResponse.ok) {
+        const oembedData = await oembedResponse.json();
+        videoTitle = oembedData.title || videoTitle;
+      }
+    } catch (e) {
+      console.log("Failed to get oEmbed data:", e);
+    }
+
+    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
     const fallbackServices = [
       {
         name: "Cobalt.tools",
         url: `https://cobalt.tools/?u=${encodeURIComponent(youtubeUrl)}`,
-        description: "Site oficial do Cobalt - cole o link e baixe",
+        description: "Cole o link e baixe diretamente",
       },
       {
         name: "Y2Mate",
@@ -250,8 +303,7 @@ serve(async (req) => {
       JSON.stringify({
         success: false,
         videoId,
-        title: videoInfo?.title || "Vídeo do YouTube",
-        author: videoInfo?.author || "",
+        title: videoTitle,
         thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
         error: `APIs indisponíveis: ${lastError}`,
         fallbackServices,
