@@ -14,6 +14,7 @@ interface DownloadResult {
   downloadUrl?: string;
   downloadServices?: DownloadService[];
   error?: string;
+  method?: "direct" | "fallback";
 }
 
 export const useYouTubeDownload = () => {
@@ -41,7 +42,7 @@ export const useYouTubeDownload = () => {
         "360p": "360",
       };
 
-      setProgress(50);
+      setProgress(40);
 
       const { data, error: fnError } = await supabase.functions.invoke(
         "youtube-download",
@@ -54,7 +55,7 @@ export const useYouTubeDownload = () => {
         }
       );
 
-      setProgress(80);
+      setProgress(70);
 
       if (fnError) {
         throw new Error(fnError.message);
@@ -68,22 +69,55 @@ export const useYouTubeDownload = () => {
         };
       }
 
+      // Store fallback services if available
       if (data.downloadServices) {
         setDownloadServices(data.downloadServices);
       }
 
-      if (data.downloadUrl) {
-        // Open the download service in a new tab
-        window.open(data.downloadUrl, "_blank");
-        setProgress(100);
+      setProgress(90);
 
-        return {
-          success: true,
-          videoId: data.videoId,
-          title: data.title,
-          downloadUrl: data.downloadUrl,
-          downloadServices: data.downloadServices,
-        };
+      if (data.downloadUrl) {
+        // For direct method, trigger actual download
+        if (data.method === "direct") {
+          console.log("Direct download URL received, triggering download...");
+          
+          // Create a hidden anchor element to trigger download
+          const link = document.createElement("a");
+          link.href = data.downloadUrl;
+          link.download = data.filename || `${data.title || "video"}.${audioOnly ? "mp3" : "mp4"}`;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          
+          // For Cobalt tunnel URLs, we need to open in new tab
+          // The browser will handle the download natively
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          
+          setProgress(100);
+
+          return {
+            success: true,
+            videoId: data.videoId,
+            title: data.title,
+            downloadUrl: data.downloadUrl,
+            method: "direct",
+          };
+        } else {
+          // Fallback: open external service
+          console.log("Fallback method, opening external service...");
+          window.open(data.downloadUrl, "_blank");
+          setProgress(100);
+
+          return {
+            success: true,
+            videoId: data.videoId,
+            title: data.title,
+            downloadUrl: data.downloadUrl,
+            downloadServices: data.downloadServices,
+            method: "fallback",
+          };
+        }
       }
 
       return {
