@@ -1,17 +1,24 @@
 import { useState } from "react";
 
+interface ExternalService {
+  name: string;
+  url: string;
+}
+
 interface DownloadResult {
   success: boolean;
-  videoId?: string;
   title?: string;
   error?: string;
   downloadUrl?: string;
+  method?: "direct" | "external";
+  externalServices?: ExternalService[];
 }
 
 export const useYouTubeDownload = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [externalServices, setExternalServices] = useState<ExternalService[]>([]);
 
   const downloadVideo = async (
     url: string,
@@ -21,6 +28,7 @@ export const useYouTubeDownload = () => {
     setIsDownloading(true);
     setProgress(20);
     setError(null);
+    setExternalServices([]);
 
     try {
       const qualityMap: Record<string, string> = {
@@ -50,49 +58,72 @@ export const useYouTubeDownload = () => {
           url,
           quality: qualityMap[quality] || "720",
           audioOnly,
-          action: "download",
         }),
       });
 
       setProgress(60);
 
       const data = await response.json();
+      console.log("Edge function response:", data);
 
       if (data.error) {
         setError(data.error);
         return { success: false, error: data.error };
       }
 
-      if (!data.downloadUrl) {
-        setError("URL de download não disponível");
-        return { success: false, error: "URL de download não disponível" };
-      }
-
       setProgress(80);
-      console.log("Opening download URL in browser...", data.downloadUrl.substring(0, 80));
 
-      // Open the download URL directly in a new tab
-      // The browser will handle the file download natively
-      const newWindow = window.open(data.downloadUrl, "_blank");
-      
-      // If popup was blocked, try with a link click
-      if (!newWindow) {
-        const link = document.createElement("a");
-        link.href = data.downloadUrl;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+      // Method 1: Direct download URL
+      if (data.method === "direct" && data.downloadUrl) {
+        console.log("Opening direct download URL:", data.downloadUrl.substring(0, 80));
+        
+        // Open download in new tab - browser handles it
+        const newWindow = window.open(data.downloadUrl, "_blank");
+        
+        if (!newWindow) {
+          // Fallback: create and click a link
+          const link = document.createElement("a");
+          link.href = data.downloadUrl;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        }
+
+        setProgress(100);
+
+        return {
+          success: true,
+          title: data.title,
+          downloadUrl: data.downloadUrl,
+          method: "direct",
+        };
       }
 
-      setProgress(100);
+      // Method 2: External services fallback
+      if (data.method === "external" && data.externalServices) {
+        console.log("Using external services fallback");
+        setExternalServices(data.externalServices);
+        
+        // Auto-open the first service
+        if (data.externalServices.length > 0) {
+          window.open(data.externalServices[0].url, "_blank");
+        }
 
-      return {
-        success: true,
-        title: data.title || data.filename,
-        downloadUrl: data.downloadUrl,
-      };
+        setProgress(100);
+
+        return {
+          success: true,
+          title: data.title,
+          method: "external",
+          externalServices: data.externalServices,
+        };
+      }
+
+      // No valid response
+      setError("Não foi possível obter link de download");
+      return { success: false, error: "Não foi possível obter link de download" };
 
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro no download";
@@ -101,16 +132,15 @@ export const useYouTubeDownload = () => {
       return { success: false, error: message };
     } finally {
       setIsDownloading(false);
-      setTimeout(() => setProgress(0), 3000);
+      setTimeout(() => {
+        setProgress(0);
+        setExternalServices([]);
+      }, 5000);
     }
   };
 
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  const openExternalService = (url: string) => {
+    window.open(url, "_blank");
   };
 
   return {
@@ -118,6 +148,7 @@ export const useYouTubeDownload = () => {
     isDownloading,
     progress,
     error,
-    formatFileSize,
+    externalServices,
+    openExternalService,
   };
 };
