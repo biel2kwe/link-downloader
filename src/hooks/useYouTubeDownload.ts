@@ -1,27 +1,18 @@
 import { useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
-
-interface DownloadService {
-  name: string;
-  url: string;
-  description: string;
-}
 
 interface DownloadResult {
   success: boolean;
   videoId?: string;
   title?: string;
-  downloadUrl?: string;
-  downloadServices?: DownloadService[];
   error?: string;
-  method?: "direct" | "fallback";
+  fileSize?: number;
 }
 
 export const useYouTubeDownload = () => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [downloadServices, setDownloadServices] = useState<DownloadService[]>([]);
+  const [downloadedSize, setDownloadedSize] = useState<number>(0);
 
   const downloadVideo = async (
     url: string,
@@ -29,9 +20,9 @@ export const useYouTubeDownload = () => {
     audioOnly: boolean
   ): Promise<DownloadResult> => {
     setIsDownloading(true);
-    setProgress(20);
+    setProgress(10);
     setError(null);
-    setDownloadServices([]);
+    setDownloadedSize(0);
 
     try {
       const qualityMap: Record<string, string> = {
@@ -42,87 +33,133 @@ export const useYouTubeDownload = () => {
         "360p": "360",
       };
 
-      setProgress(40);
+      setProgress(20);
 
-      const { data, error: fnError } = await supabase.functions.invoke(
-        "youtube-download",
-        {
-          body: {
-            url,
-            quality: qualityMap[quality] || "720",
-            audioOnly,
-          },
-        }
-      );
+      // Get the edge function URL
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      
+      const functionUrl = `${supabaseUrl}/functions/v1/youtube-download`;
 
-      setProgress(70);
+      setProgress(30);
+      console.log("Starting direct download from edge function...");
 
-      if (fnError) {
-        throw new Error(fnError.message);
-      }
+      // Make direct fetch request to get the binary stream
+      const response = await fetch(functionUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseKey}`,
+          "apikey": supabaseKey,
+        },
+        body: JSON.stringify({
+          url,
+          quality: qualityMap[quality] || "720",
+          audioOnly,
+          action: "download",
+        }),
+      });
 
-      if (data.error) {
-        setError(data.error);
-        return {
-          success: false,
-          error: data.error,
-        };
-      }
+      setProgress(50);
 
-      // Store fallback services if available
-      if (data.downloadServices) {
-        setDownloadServices(data.downloadServices);
-      }
-
-      setProgress(90);
-
-      if (data.downloadUrl) {
-        // For direct method, trigger actual download
-        if (data.method === "direct") {
-          console.log("Direct download URL received, triggering download...");
-          
-          // Create a hidden anchor element to trigger download
-          const link = document.createElement("a");
-          link.href = data.downloadUrl;
-          link.download = data.filename || `${data.title || "video"}.${audioOnly ? "mp3" : "mp4"}`;
-          link.target = "_blank";
-          link.rel = "noopener noreferrer";
-          
-          // For Cobalt tunnel URLs, we need to open in new tab
-          // The browser will handle the download natively
-          document.body.appendChild(link);
-          link.click();
-          document.body.removeChild(link);
-          
-          setProgress(100);
-
+      // Check if we got JSON (error) or binary (success)
+      const contentType = response.headers.get("content-type") || "";
+      
+      if (contentType.includes("application/json")) {
+        // It's an error response
+        const data = await response.json();
+        if (data.error) {
+          setError(data.error);
           return {
-            success: true,
-            videoId: data.videoId,
-            title: data.title,
-            downloadUrl: data.downloadUrl,
-            method: "direct",
+            success: false,
+            error: data.error,
           };
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(`Erro no servidor: ${response.status}`);
+      }
+
+      setProgress(60);
+
+      // Get file info from headers
+      const contentLength = response.headers.get("content-length");
+      const contentDisposition = response.headers.get("content-disposition");
+      
+      let filename = `video.${audioOnly ? "mp3" : "mp4"}`;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="([^"]+)"/);
+        if (match) {
+          filename = match[1];
+        }
+      }
+
+      console.log(`Downloading: ${filename}, Size: ${contentLength} bytes`);
+
+      // Read the response as blob with progress tracking
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Não foi possível ler a resposta");
+      }
+
+      const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
+      const chunks: Uint8Array[] = [];
+      let receivedSize = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+        
+        chunks.push(value);
+        receivedSize += value.length;
+        setDownloadedSize(receivedSize);
+        
+        // Update progress (60-95% for download)
+        if (totalSize > 0) {
+          const downloadProgress = 60 + (receivedSize / totalSize) * 35;
+          setProgress(Math.min(95, downloadProgress));
         } else {
-          // Fallback: open external service
-          console.log("Fallback method, opening external service...");
-          window.open(data.downloadUrl, "_blank");
-          setProgress(100);
-
-          return {
-            success: true,
-            videoId: data.videoId,
-            title: data.title,
-            downloadUrl: data.downloadUrl,
-            downloadServices: data.downloadServices,
-            method: "fallback",
-          };
+          // If we don't know total size, show incremental progress
+          setProgress(Math.min(95, 60 + (chunks.length * 2)));
         }
       }
+
+      setProgress(96);
+
+      // Combine chunks into blob
+      const blobParts: BlobPart[] = chunks.map(chunk => chunk.buffer as ArrayBuffer);
+      const blob = new Blob(blobParts, { 
+        type: audioOnly ? "audio/mpeg" : "video/mp4" 
+      });
+
+      console.log(`Download complete! Total size: ${blob.size} bytes`);
+
+      if (blob.size === 0) {
+        throw new Error("Arquivo vazio recebido");
+      }
+
+      setProgress(98);
+
+      // Create download link
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Clean up blob URL after a delay
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+
+      setProgress(100);
 
       return {
-        success: false,
-        error: "Nenhuma URL de download disponível",
+        success: true,
+        title: filename,
+        fileSize: blob.size,
       };
 
     } catch (err) {
@@ -135,12 +172,19 @@ export const useYouTubeDownload = () => {
       };
     } finally {
       setIsDownloading(false);
-      setTimeout(() => setProgress(0), 2000);
+      setTimeout(() => {
+        setProgress(0);
+        setDownloadedSize(0);
+      }, 3000);
     }
   };
 
-  const openDownloadService = (serviceUrl: string) => {
-    window.open(serviceUrl, "_blank");
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
   return {
@@ -148,7 +192,7 @@ export const useYouTubeDownload = () => {
     isDownloading,
     progress,
     error,
-    downloadServices,
-    openDownloadService,
+    downloadedSize,
+    formatFileSize,
   };
 };
