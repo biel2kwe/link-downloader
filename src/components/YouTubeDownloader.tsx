@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, Loader2, Youtube, ExternalLink, Music, Video } from "lucide-react";
+import { Link, Loader2, Youtube, ExternalLink, Music, Video, Download, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { VideoPreview } from "./VideoPreview";
@@ -24,13 +24,16 @@ export const YouTubeDownloader = () => {
   const [videoId, setVideoId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [audioOnly, setAudioOnly] = useState(false);
+  const [downloadReady, setDownloadReady] = useState(false);
   const { toast } = useToast();
   const { 
     processVideo, 
     isProcessing, 
     error: processError,
-    downloadServices,
+    fallbackServices,
     videoTitle,
+    downloadUrl,
+    triggerDownload,
     openService,
     reset,
   } = useYouTubeDownload();
@@ -56,6 +59,7 @@ export const YouTubeDownloader = () => {
     }
 
     setIsLoading(true);
+    setDownloadReady(false);
     setTimeout(() => {
       setVideoId(id);
       setIsLoading(false);
@@ -67,10 +71,17 @@ export const YouTubeDownloader = () => {
 
     const result = await processVideo(url, audioOnly);
 
-    if (result.success && result.downloadServices && result.downloadServices.length > 0) {
+    if (result.success && result.downloadUrl) {
+      setDownloadReady(true);
       toast({
         title: "Pronto!",
-        description: "Escolha um dos serviços abaixo para baixar.",
+        description: "Clique no botão para baixar o arquivo.",
+      });
+    } else if (result.fallbackServices && result.fallbackServices.length > 0) {
+      toast({
+        title: "Use um serviço alternativo",
+        description: "As APIs diretas estão indisponíveis. Use um dos serviços abaixo.",
+        variant: "destructive",
       });
     } else {
       toast({
@@ -81,10 +92,21 @@ export const YouTubeDownloader = () => {
     }
   };
 
+  const handleDownload = () => {
+    if (downloadUrl) {
+      triggerDownload(downloadUrl, videoTitle);
+      toast({
+        title: "Download iniciado!",
+        description: "O arquivo está sendo baixado.",
+      });
+    }
+  };
+
   const handleReset = () => {
     setUrl("");
     setVideoId(null);
     setAudioOnly(false);
+    setDownloadReady(false);
     reset();
   };
 
@@ -166,7 +188,7 @@ export const YouTubeDownloader = () => {
               </div>
 
               {/* Process Button */}
-              {downloadServices.length === 0 && (
+              {!downloadReady && fallbackServices.length === 0 && (
                 <Button
                   variant="glow"
                   className="w-full"
@@ -180,25 +202,54 @@ export const YouTubeDownloader = () => {
                       Processando...
                     </>
                   ) : (
-                    `Obter Links de Download`
+                    `Preparar Download`
                   )}
                 </Button>
               )}
 
-              {/* Download Services */}
-              {downloadServices.length > 0 && (
+              {/* Download Ready - Direct Download Button */}
+              {downloadReady && downloadUrl && (
+                <div className="space-y-4">
+                  <div className="text-center">
+                    <div className="inline-flex items-center gap-2 text-green-500 mb-2">
+                      <CheckCircle className="w-5 h-5" />
+                      <span className="font-medium">Download pronto!</span>
+                    </div>
+                    {videoTitle && (
+                      <p className="text-sm text-muted-foreground">{videoTitle}</p>
+                    )}
+                  </div>
+                  
+                  <Button
+                    variant="glow"
+                    className="w-full"
+                    onClick={handleDownload}
+                    size="lg"
+                  >
+                    <Download className="w-5 h-5 mr-2" />
+                    Baixar {audioOnly ? "MP3" : "MP4"}
+                  </Button>
+
+                  <p className="text-xs text-center text-muted-foreground">
+                    O download será iniciado automaticamente
+                  </p>
+                </div>
+              )}
+
+              {/* Fallback Services */}
+              {fallbackServices.length > 0 && (
                 <div className="space-y-4">
                   <div className="text-center">
                     <p className="text-sm text-muted-foreground mb-1">
                       {videoTitle && <span className="font-medium text-foreground">{videoTitle}</span>}
                     </p>
-                    <p className="text-sm text-muted-foreground">
-                      Clique em um serviço para baixar:
+                    <p className="text-sm text-yellow-500">
+                      APIs diretas indisponíveis. Use um serviço externo:
                     </p>
                   </div>
                   
                   <div className="grid gap-3">
-                    {downloadServices.map((service, index) => (
+                    {fallbackServices.map((service, index) => (
                       <Button
                         key={service.name}
                         variant={index === 0 ? "default" : "outline"}
@@ -222,20 +273,20 @@ export const YouTubeDownloader = () => {
                   </div>
 
                   <p className="text-xs text-center text-muted-foreground">
-                    Estes serviços externos permitem baixar o vídeo com o tamanho correto.
+                    Cole o link do vídeo no serviço escolhido para baixar.
                   </p>
                 </div>
               )}
 
               {/* Error state */}
-              {processError && (
+              {processError && !fallbackServices.length && !downloadReady && (
                 <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/30 text-center">
                   <p className="text-sm text-destructive">{processError}</p>
                 </div>
               )}
 
               {/* Reset Button */}
-              {downloadServices.length > 0 && (
+              {(downloadReady || fallbackServices.length > 0) && (
                 <Button
                   variant="outline"
                   className="w-full"

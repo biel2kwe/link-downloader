@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-interface DownloadService {
+interface FallbackService {
   name: string;
   url: string;
   description: string;
@@ -9,31 +9,36 @@ interface DownloadService {
 interface DownloadResult {
   success: boolean;
   title?: string;
+  downloadUrl?: string;
+  filename?: string;
   error?: string;
-  downloadServices?: DownloadService[];
+  fallbackServices?: FallbackService[];
 }
 
 export const useYouTubeDownload = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [downloadServices, setDownloadServices] = useState<DownloadService[]>([]);
+  const [fallbackServices, setFallbackServices] = useState<FallbackService[]>([]);
   const [videoTitle, setVideoTitle] = useState<string>("");
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
 
   const processVideo = async (
     url: string,
-    audioOnly: boolean
+    audioOnly: boolean,
+    quality?: string
   ): Promise<DownloadResult> => {
     setIsProcessing(true);
     setError(null);
-    setDownloadServices([]);
+    setFallbackServices([]);
     setVideoTitle("");
+    setDownloadUrl(null);
 
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       const functionUrl = `${supabaseUrl}/functions/v1/youtube-download`;
 
-      console.log("Requesting download services from edge function...");
+      console.log("Requesting download from edge function...");
 
       const response = await fetch(functionUrl, {
         method: "POST",
@@ -45,25 +50,40 @@ export const useYouTubeDownload = () => {
         body: JSON.stringify({
           url,
           audioOnly,
+          quality,
         }),
       });
 
       const data = await response.json();
       console.log("Edge function response:", data);
 
-      if (data.error) {
+      if (data.error && !data.fallbackServices) {
         setError(data.error);
         return { success: false, error: data.error };
       }
 
-      if (data.downloadServices && data.downloadServices.length > 0) {
-        setDownloadServices(data.downloadServices);
-        setVideoTitle(data.title || "");
-        
+      setVideoTitle(data.title || "");
+
+      // If we got a direct download URL
+      if (data.success && data.downloadUrl) {
+        setDownloadUrl(data.downloadUrl);
         return {
           success: true,
           title: data.title,
-          downloadServices: data.downloadServices,
+          downloadUrl: data.downloadUrl,
+          filename: data.filename,
+        };
+      }
+
+      // If APIs failed but we have fallback services
+      if (data.fallbackServices && data.fallbackServices.length > 0) {
+        setFallbackServices(data.fallbackServices);
+        setError(data.error || "APIs não disponíveis");
+        return {
+          success: false,
+          title: data.title,
+          error: data.error,
+          fallbackServices: data.fallbackServices,
         };
       }
 
@@ -80,22 +100,41 @@ export const useYouTubeDownload = () => {
     }
   };
 
+  const triggerDownload = (url: string, filename?: string) => {
+    // Try to download via a hidden link
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    
+    if (filename) {
+      link.download = filename;
+    }
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const openService = (url: string) => {
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
   const reset = () => {
-    setDownloadServices([]);
+    setFallbackServices([]);
     setVideoTitle("");
     setError(null);
+    setDownloadUrl(null);
   };
 
   return {
     processVideo,
     isProcessing,
     error,
-    downloadServices,
+    fallbackServices,
     videoTitle,
+    downloadUrl,
+    triggerDownload,
     openService,
     reset,
   };
