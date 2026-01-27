@@ -13,6 +13,7 @@ interface DownloadResult {
   filename?: string;
   error?: string;
   fallbackServices?: FallbackService[];
+  fileSize?: number;
 }
 
 export const useYouTubeDownload = () => {
@@ -20,7 +21,8 @@ export const useYouTubeDownload = () => {
   const [error, setError] = useState<string | null>(null);
   const [fallbackServices, setFallbackServices] = useState<FallbackService[]>([]);
   const [videoTitle, setVideoTitle] = useState<string>("");
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+  const [fileSize, setFileSize] = useState<number>(0);
 
   const processVideo = async (
     url: string,
@@ -31,7 +33,8 @@ export const useYouTubeDownload = () => {
     setError(null);
     setFallbackServices([]);
     setVideoTitle("");
-    setDownloadUrl(null);
+    setDownloadProgress(0);
+    setFileSize(0);
 
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -54,41 +57,81 @@ export const useYouTubeDownload = () => {
         }),
       });
 
-      const data = await response.json();
-      console.log("Edge function response:", data);
+      const contentType = response.headers.get("Content-Type") || "";
+      
+      // Check if response is JSON (error or fallback) or binary (video/audio)
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+        console.log("Edge function response:", data);
 
-      if (data.error && !data.fallbackServices) {
-        setError(data.error);
-        return { success: false, error: data.error };
+        if (data.error && !data.fallbackServices) {
+          setError(data.error);
+          return { success: false, error: data.error };
+        }
+
+        setVideoTitle(data.title || "");
+
+        // If we got fallback services
+        if (data.fallbackServices && data.fallbackServices.length > 0) {
+          setFallbackServices(data.fallbackServices);
+          setError(data.error || "Use um serviço alternativo");
+          return {
+            success: false,
+            title: data.title,
+            error: data.error,
+            fallbackServices: data.fallbackServices,
+          };
+        }
+
+        setError("Nenhum serviço de download disponível");
+        return { success: false, error: "Nenhum serviço de download disponível" };
       }
 
-      setVideoTitle(data.title || "");
+      // Response is binary - this is the actual file!
+      console.log("Received binary data, downloading...");
+      
+      const contentLength = response.headers.get("Content-Length");
+      const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
+      setFileSize(totalSize);
+      
+      // Get filename from Content-Disposition header
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const filenameMatch = disposition.match(/filename="?([^";\n]+)"?/);
+      const filename = filenameMatch ? filenameMatch[1] : (audioOnly ? "audio.mp3" : "video.mp4");
+      
+      setVideoTitle(filename.replace(/\.[^.]+$/, '').replace(/_/g, ' '));
 
-      // If we got a direct download URL
-      if (data.success && data.downloadUrl) {
-        setDownloadUrl(data.downloadUrl);
-        return {
-          success: true,
-          title: data.title,
-          downloadUrl: data.downloadUrl,
-          filename: data.filename,
-        };
+      // Read the response as a blob
+      const blob = await response.blob();
+      
+      console.log(`Blob size: ${blob.size} bytes`);
+      setFileSize(blob.size);
+      setDownloadProgress(100);
+
+      if (blob.size === 0) {
+        throw new Error("Arquivo vazio recebido");
       }
 
-      // If APIs failed but we have fallback services
-      if (data.fallbackServices && data.fallbackServices.length > 0) {
-        setFallbackServices(data.fallbackServices);
-        setError(data.error || "APIs não disponíveis");
-        return {
-          success: false,
-          title: data.title,
-          error: data.error,
-          fallbackServices: data.fallbackServices,
-        };
-      }
+      // Create download URL and trigger download
+      const downloadUrl = URL.createObjectURL(blob);
+      
+      // Trigger download
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      // Clean up the URL after a delay
+      setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
 
-      setError("Nenhum serviço de download disponível");
-      return { success: false, error: "Nenhum serviço de download disponível" };
+      return {
+        success: true,
+        title: filename,
+        filename,
+        fileSize: blob.size,
+      };
 
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao processar";
@@ -100,22 +143,6 @@ export const useYouTubeDownload = () => {
     }
   };
 
-  const triggerDownload = (url: string, filename?: string) => {
-    // Try to download via a hidden link
-    const link = document.createElement("a");
-    link.href = url;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    
-    if (filename) {
-      link.download = filename;
-    }
-    
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   const openService = (url: string) => {
     window.open(url, "_blank", "noopener,noreferrer");
   };
@@ -124,7 +151,16 @@ export const useYouTubeDownload = () => {
     setFallbackServices([]);
     setVideoTitle("");
     setError(null);
-    setDownloadUrl(null);
+    setDownloadProgress(0);
+    setFileSize(0);
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
   return {
@@ -133,8 +169,9 @@ export const useYouTubeDownload = () => {
     error,
     fallbackServices,
     videoTitle,
-    downloadUrl,
-    triggerDownload,
+    downloadProgress,
+    fileSize,
+    formatFileSize,
     openService,
     reset,
   };

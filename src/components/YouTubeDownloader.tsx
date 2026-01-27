@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Link, Loader2, Youtube, ExternalLink, Music, Video, Download, CheckCircle } from "lucide-react";
+import { Link, Loader2, Youtube, ExternalLink, Music, Video, Download, CheckCircle, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { VideoPreview } from "./VideoPreview";
 import { useToast } from "@/hooks/use-toast";
 import { useYouTubeDownload } from "@/hooks/useYouTubeDownload";
@@ -24,7 +25,7 @@ export const YouTubeDownloader = () => {
   const [videoId, setVideoId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [audioOnly, setAudioOnly] = useState(false);
-  const [downloadReady, setDownloadReady] = useState(false);
+  const [downloadComplete, setDownloadComplete] = useState(false);
   const { toast } = useToast();
   const { 
     processVideo, 
@@ -32,8 +33,9 @@ export const YouTubeDownloader = () => {
     error: processError,
     fallbackServices,
     videoTitle,
-    downloadUrl,
-    triggerDownload,
+    downloadProgress,
+    fileSize,
+    formatFileSize,
     openService,
     reset,
   } = useYouTubeDownload();
@@ -59,7 +61,7 @@ export const YouTubeDownloader = () => {
     }
 
     setIsLoading(true);
-    setDownloadReady(false);
+    setDownloadComplete(false);
     setTimeout(() => {
       setVideoId(id);
       setIsLoading(false);
@@ -68,19 +70,20 @@ export const YouTubeDownloader = () => {
 
   const handleProcess = async () => {
     if (!url) return;
+    setDownloadComplete(false);
 
     const result = await processVideo(url, audioOnly);
 
-    if (result.success && result.downloadUrl) {
-      setDownloadReady(true);
+    if (result.success) {
+      setDownloadComplete(true);
       toast({
-        title: "Pronto!",
-        description: "Clique no botão para baixar o arquivo.",
+        title: "Download concluído!",
+        description: `${result.filename} (${formatFileSize(result.fileSize || 0)})`,
       });
     } else if (result.fallbackServices && result.fallbackServices.length > 0) {
       toast({
         title: "Use um serviço alternativo",
-        description: "As APIs diretas estão indisponíveis. Use um dos serviços abaixo.",
+        description: "O download direto não está disponível. Use um dos serviços abaixo.",
         variant: "destructive",
       });
     } else {
@@ -92,21 +95,11 @@ export const YouTubeDownloader = () => {
     }
   };
 
-  const handleDownload = () => {
-    if (downloadUrl) {
-      triggerDownload(downloadUrl, videoTitle);
-      toast({
-        title: "Download iniciado!",
-        description: "O arquivo está sendo baixado.",
-      });
-    }
-  };
-
   const handleReset = () => {
     setUrl("");
     setVideoId(null);
     setAudioOnly(false);
-    setDownloadReady(false);
+    setDownloadComplete(false);
     reset();
   };
 
@@ -188,51 +181,59 @@ export const YouTubeDownloader = () => {
               </div>
 
               {/* Process Button */}
-              {!downloadReady && fallbackServices.length === 0 && (
-                <Button
-                  variant="glow"
-                  className="w-full"
-                  onClick={handleProcess}
-                  disabled={isProcessing}
-                  size="lg"
-                >
-                  {isProcessing ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                      Processando...
-                    </>
-                  ) : (
-                    `Preparar Download`
+              {!downloadComplete && fallbackServices.length === 0 && (
+                <div className="space-y-4">
+                  <Button
+                    variant="glow"
+                    className="w-full"
+                    onClick={handleProcess}
+                    disabled={isProcessing}
+                    size="lg"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                        Baixando...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-5 h-5 mr-2" />
+                        Baixar {audioOnly ? "MP3" : "MP4"}
+                      </>
+                    )}
+                  </Button>
+
+                  {/* Progress indicator */}
+                  {isProcessing && (
+                    <div className="space-y-2">
+                      <Progress value={downloadProgress} className="h-2" />
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>Processando vídeo...</span>
+                        {fileSize > 0 && <span>{formatFileSize(fileSize)}</span>}
+                      </div>
+                    </div>
                   )}
-                </Button>
+                </div>
               )}
 
-              {/* Download Ready - Direct Download Button */}
-              {downloadReady && downloadUrl && (
+              {/* Download Complete */}
+              {downloadComplete && (
                 <div className="space-y-4">
-                  <div className="text-center">
+                  <div className="text-center p-4 rounded-xl bg-green-500/10 border border-green-500/30">
                     <div className="inline-flex items-center gap-2 text-green-500 mb-2">
                       <CheckCircle className="w-5 h-5" />
-                      <span className="font-medium">Download pronto!</span>
+                      <span className="font-medium">Download concluído!</span>
                     </div>
                     {videoTitle && (
                       <p className="text-sm text-muted-foreground">{videoTitle}</p>
                     )}
+                    {fileSize > 0 && (
+                      <p className="text-sm font-medium text-green-500 mt-1">
+                        <FileDown className="w-4 h-4 inline mr-1" />
+                        {formatFileSize(fileSize)}
+                      </p>
+                    )}
                   </div>
-                  
-                  <Button
-                    variant="glow"
-                    className="w-full"
-                    onClick={handleDownload}
-                    size="lg"
-                  >
-                    <Download className="w-5 h-5 mr-2" />
-                    Baixar {audioOnly ? "MP3" : "MP4"}
-                  </Button>
-
-                  <p className="text-xs text-center text-muted-foreground">
-                    O download será iniciado automaticamente
-                  </p>
                 </div>
               )}
 
@@ -279,14 +280,14 @@ export const YouTubeDownloader = () => {
               )}
 
               {/* Error state */}
-              {processError && !fallbackServices.length && !downloadReady && (
+              {processError && !fallbackServices.length && !downloadComplete && (
                 <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/30 text-center">
                   <p className="text-sm text-destructive">{processError}</p>
                 </div>
               )}
 
               {/* Reset Button */}
-              {(downloadReady || fallbackServices.length > 0) && (
+              {(downloadComplete || fallbackServices.length > 0) && (
                 <Button
                   variant="outline"
                   className="w-full"
