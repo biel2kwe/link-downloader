@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Link, Loader2, Youtube, ExternalLink, Music, Video, Download, CheckCircle, FileDown } from "lucide-react";
+import { Download, Link, Loader2, AlertCircle, Youtube, ExternalLink, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { VideoPreview } from "./VideoPreview";
+import { ResolutionSelector } from "./ResolutionSelector";
+import { AudioToggle } from "./AudioToggle";
 import { useToast } from "@/hooks/use-toast";
 import { useYouTubeDownload } from "@/hooks/useYouTubeDownload";
 
@@ -24,21 +26,11 @@ export const YouTubeDownloader = () => {
   const [url, setUrl] = useState("");
   const [videoId, setVideoId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [audioOnly, setAudioOnly] = useState(false);
-  const [downloadComplete, setDownloadComplete] = useState(false);
+  const [resolution, setResolution] = useState("1080p");
+  const [includeAudio, setIncludeAudio] = useState(true);
+  const [showServices, setShowServices] = useState(false);
   const { toast } = useToast();
-  const { 
-    processVideo, 
-    isProcessing, 
-    error: processError,
-    fallbackServices,
-    videoTitle,
-    downloadProgress,
-    fileSize,
-    formatFileSize,
-    openService,
-    reset,
-  } = useYouTubeDownload();
+  const { downloadVideo, isDownloading, progress, error: downloadError, downloadServices, openDownloadService } = useYouTubeDownload();
 
   const handleUrlSubmit = () => {
     if (!url.trim()) {
@@ -61,34 +53,28 @@ export const YouTubeDownloader = () => {
     }
 
     setIsLoading(true);
-    setDownloadComplete(false);
+    setShowServices(false);
     setTimeout(() => {
       setVideoId(id);
       setIsLoading(false);
-    }, 500);
+    }, 800);
   };
 
-  const handleProcess = async () => {
+  const handleDownload = async () => {
     if (!url) return;
-    setDownloadComplete(false);
 
-    const result = await processVideo(url, audioOnly);
+    const audioOnly = !includeAudio;
+    const result = await downloadVideo(url, resolution, audioOnly);
 
     if (result.success) {
-      setDownloadComplete(true);
+      setShowServices(true);
       toast({
-        title: "Download concluído!",
-        description: `${result.filename} (${formatFileSize(result.fileSize || 0)})`,
-      });
-    } else if (result.fallbackServices && result.fallbackServices.length > 0) {
-      toast({
-        title: "Use um serviço alternativo",
-        description: "O download direto não está disponível. Use um dos serviços abaixo.",
-        variant: "destructive",
+        title: "Serviço de download aberto!",
+        description: "Escolha a qualidade desejada no site que foi aberto.",
       });
     } else {
       toast({
-        title: "Erro",
+        title: "Erro no download",
         description: result.error || "Falha ao processar o vídeo.",
         variant: "destructive",
       });
@@ -98,9 +84,9 @@ export const YouTubeDownloader = () => {
   const handleReset = () => {
     setUrl("");
     setVideoId(null);
-    setAudioOnly(false);
-    setDownloadComplete(false);
-    reset();
+    setResolution("1080p");
+    setIncludeAudio(true);
+    setShowServices(false);
   };
 
   return (
@@ -118,7 +104,7 @@ export const YouTubeDownloader = () => {
             <Youtube className="w-10 h-10 text-primary" />
           </div>
           <h1 className="text-4xl sm:text-5xl font-extrabold text-foreground tracking-tight">
-            Baixador de videos do Youtube
+            YouTube <span className="text-primary">Downloader</span>
           </h1>
           <p className="text-muted-foreground text-lg">
             Baixe vídeos do YouTube em alta qualidade
@@ -160,142 +146,105 @@ export const YouTubeDownloader = () => {
             <VideoPreview videoId={videoId} />
 
             <div className="glass-card p-6 space-y-6">
-              {/* Format Toggle */}
-              <div className="flex gap-3">
-                <Button
-                  variant={!audioOnly ? "default" : "outline"}
-                  className="flex-1 gap-2"
-                  onClick={() => setAudioOnly(false)}
-                >
-                  <Video className="w-4 h-4" />
-                  Vídeo (MP4)
-                </Button>
-                <Button
-                  variant={audioOnly ? "default" : "outline"}
-                  className="flex-1 gap-2"
-                  onClick={() => setAudioOnly(true)}
-                >
-                  <Music className="w-4 h-4" />
-                  Áudio (MP3)
-                </Button>
-              </div>
+              <ResolutionSelector
+                selected={resolution}
+                onSelect={setResolution}
+              />
 
-              {/* Process Button */}
-              {!downloadComplete && fallbackServices.length === 0 && (
-                <div className="space-y-4">
-                  <Button
-                    variant="glow"
-                    className="w-full"
-                    onClick={handleProcess}
-                    disabled={isProcessing}
-                    size="lg"
-                  >
-                    {isProcessing ? (
-                      <>
-                        <Loader2 className="w-5 h-5 animate-spin mr-2" />
-                        Baixando...
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-5 h-5 mr-2" />
-                        Baixar {audioOnly ? "MP3" : "MP4"}
-                      </>
-                    )}
-                  </Button>
+              <AudioToggle
+                includeAudio={includeAudio}
+                onToggle={setIncludeAudio}
+              />
 
-                  {/* Progress indicator */}
-                  {isProcessing && (
-                    <div className="space-y-2">
-                      <Progress value={downloadProgress} className="h-2" />
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>Processando vídeo...</span>
-                        {fileSize > 0 && <span>{formatFileSize(fileSize)}</span>}
+              {/* Download progress */}
+              {isDownloading && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      {progress < 60 ? "Processando..." : "Abrindo serviço..."}
+                    </span>
+                    <span className="text-primary font-medium">{Math.round(progress)}%</span>
+                  </div>
+                  <Progress value={progress} className="h-2" />
+                </div>
+              )}
+
+              {/* Download services */}
+              {showServices && downloadServices.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-start gap-3 p-4 rounded-xl bg-green-500/10 border border-green-500/30">
+                    <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0 mt-0.5" />
+                    <div className="text-sm text-muted-foreground flex-1">
+                      <p className="font-medium text-foreground mb-2">Serviços de download disponíveis</p>
+                      <p className="mb-3">
+                        Um serviço foi aberto em nova aba. Se não funcionou, tente uma das alternativas:
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {downloadServices.map((service) => (
+                          <Button
+                            key={service.name}
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openDownloadService(service.url)}
+                            className="gap-2"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            {service.name}
+                          </Button>
+                        ))}
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
-
-              {/* Download Complete */}
-              {downloadComplete && (
-                <div className="space-y-4">
-                  <div className="text-center p-4 rounded-xl bg-green-500/10 border border-green-500/30">
-                    <div className="inline-flex items-center gap-2 text-green-500 mb-2">
-                      <CheckCircle className="w-5 h-5" />
-                      <span className="font-medium">Download concluído!</span>
-                    </div>
-                    {videoTitle && (
-                      <p className="text-sm text-muted-foreground">{videoTitle}</p>
-                    )}
-                    {fileSize > 0 && (
-                      <p className="text-sm font-medium text-green-500 mt-1">
-                        <FileDown className="w-4 h-4 inline mr-1" />
-                        {formatFileSize(fileSize)}
-                      </p>
-                    )}
                   </div>
-                </div>
-              )}
-
-              {/* Fallback Services */}
-              {fallbackServices.length > 0 && (
-                <div className="space-y-4">
-                  <div className="text-center">
-                    <p className="text-sm text-muted-foreground mb-1">
-                      {videoTitle && <span className="font-medium text-foreground">{videoTitle}</span>}
-                    </p>
-                    <p className="text-sm text-yellow-500">
-                      APIs diretas indisponíveis. Use um serviço externo:
-                    </p>
-                  </div>
-                  
-                  <div className="grid gap-3">
-                    {fallbackServices.map((service, index) => (
-                      <Button
-                        key={service.name}
-                        variant={index === 0 ? "default" : "outline"}
-                        className="w-full justify-between h-auto py-3"
-                        onClick={() => openService(service.url)}
-                      >
-                        <div className="flex items-center gap-3">
-                          <ExternalLink className="w-4 h-4" />
-                          <div className="text-left">
-                            <div className="font-medium">{service.name}</div>
-                            <div className="text-xs opacity-70">{service.description}</div>
-                          </div>
-                        </div>
-                        {index === 0 && (
-                          <span className="text-xs bg-primary-foreground/20 px-2 py-1 rounded">
-                            Recomendado
-                          </span>
-                        )}
-                      </Button>
-                    ))}
-                  </div>
-
-                  <p className="text-xs text-center text-muted-foreground">
-                    Cole o link do vídeo no serviço escolhido para baixar.
-                  </p>
                 </div>
               )}
 
               {/* Error state */}
-              {processError && !fallbackServices.length && !downloadComplete && (
-                <div className="p-4 rounded-xl bg-destructive/10 border border-destructive/30 text-center">
-                  <p className="text-sm text-destructive">{processError}</p>
+              {downloadError && (
+                <div className="flex items-start gap-3 p-4 rounded-xl bg-destructive/10 border border-destructive/30">
+                  <AlertCircle className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+                  <div className="text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground mb-1">Erro no processamento</p>
+                    <p>{downloadError}</p>
+                  </div>
                 </div>
               )}
 
-              {/* Reset Button */}
-              {(downloadComplete || fallbackServices.length > 0) && (
+              {/* Info state */}
+              {!isDownloading && !downloadError && !showServices && (
+                <div className="flex items-start gap-3 p-4 rounded-xl bg-primary/10 border border-primary/30">
+                  <CheckCircle2 className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                  <div className="text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground mb-1">Pronto para download</p>
+                    <p>
+                      Clique no botão abaixo. Um serviço de download será aberto em nova aba onde você pode escolher a qualidade.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-3">
                 <Button
                   variant="outline"
-                  className="w-full"
+                  className="flex-1"
                   onClick={handleReset}
+                  disabled={isDownloading}
                 >
-                  Baixar outro vídeo
+                  Limpar
                 </Button>
-              )}
+                <Button
+                  variant="glow"
+                  className="flex-1"
+                  onClick={handleDownload}
+                  disabled={isDownloading}
+                >
+                  {isDownloading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <Download className="w-5 h-5" />
+                  )}
+                  {isDownloading ? "Processando..." : `Baixar ${resolution}`}
+                </Button>
+              </div>
             </div>
           </div>
         )}

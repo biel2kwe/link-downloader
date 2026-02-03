@@ -1,5 +1,4 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import ytdl from "https://deno.land/x/ytdl_core@v0.1.2/mod.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,8 +7,8 @@ const corsHeaders = {
 
 interface DownloadRequest {
   url: string;
-  audioOnly?: boolean;
   quality?: string;
+  audioOnly?: boolean;
 }
 
 // Extract video ID from various YouTube URL formats
@@ -26,45 +25,23 @@ function extractVideoId(url: string): string | null {
   return null;
 }
 
-// Get video title from oEmbed API
-async function getVideoTitle(videoId: string): Promise<string> {
+// Get video info from YouTube oEmbed
+async function getVideoInfo(videoId: string): Promise<{ title: string; author: string } | null> {
   try {
     const response = await fetch(
       `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
     );
     if (response.ok) {
       const data = await response.json();
-      return data.title || "video";
+      return {
+        title: data.title || "video",
+        author: data.author_name || "unknown",
+      };
     }
   } catch (e) {
-    console.log("Failed to get title:", e);
+    console.log("Failed to get video info:", e);
   }
-  return "video";
-}
-
-// Sanitize filename
-function sanitizeFilename(title: string): string {
-  return title
-    .replace(/[<>:"/\\|?*]/g, '')
-    .replace(/[^\x00-\x7F]/g, (char) => {
-      const map: Record<string, string> = {
-        'á': 'a', 'à': 'a', 'ã': 'a', 'â': 'a', 'ä': 'a',
-        'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e',
-        'í': 'i', 'ì': 'i', 'î': 'i', 'ï': 'i',
-        'ó': 'o', 'ò': 'o', 'õ': 'o', 'ô': 'o', 'ö': 'o',
-        'ú': 'u', 'ù': 'u', 'û': 'u', 'ü': 'u',
-        'ç': 'c', 'ñ': 'n',
-        'Á': 'A', 'À': 'A', 'Ã': 'A', 'Â': 'A', 'Ä': 'A',
-        'É': 'E', 'È': 'E', 'Ê': 'E', 'Ë': 'E',
-        'Í': 'I', 'Ì': 'I', 'Î': 'I', 'Ï': 'I',
-        'Ó': 'O', 'Ò': 'O', 'Õ': 'O', 'Ô': 'O', 'Ö': 'O',
-        'Ú': 'U', 'Ù': 'U', 'Û': 'U', 'Ü': 'U',
-        'Ç': 'C', 'Ñ': 'N',
-      };
-      return map[char] || '';
-    })
-    .replace(/\s+/g, '_')
-    .substring(0, 100);
+  return null;
 }
 
 serve(async (req) => {
@@ -74,16 +51,16 @@ serve(async (req) => {
 
   try {
     const body: DownloadRequest = await req.json();
-    const { url, audioOnly = false, quality } = body;
+    const { url, quality = "720", audioOnly = false } = body;
 
     if (!url) {
       return new Response(
-        JSON.stringify({ error: "URL é obrigatória" }),
+        JSON.stringify({ error: "URL is required" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`Processing URL: ${url}, audioOnly: ${audioOnly}, quality: ${quality}`);
+    console.log(`Processing: ${url}, quality: ${quality}, audioOnly: ${audioOnly}`);
 
     const videoId = extractVideoId(url);
     
@@ -94,102 +71,58 @@ serve(async (req) => {
       );
     }
 
-    // Get video title
-    const videoTitle = await getVideoTitle(videoId);
-    console.log(`Video title: ${videoTitle}`);
+    // Get video info for the title
+    const videoInfo = await getVideoInfo(videoId);
+    const safeTitle = videoInfo?.title
+      ?.replace(/[^\w\s-]/g, "")
+      ?.substring(0, 50)
+      ?.trim() || "video";
 
-    try {
-      // Use ytdl_core to get video info and stream
-      console.log(`Fetching video info for: ${videoId}`);
-      
-      // Get stream from ytdl_core
-      const stream = await ytdl(videoId, {
-        filter: audioOnly ? "audioonly" : "audioandvideo",
-        quality: audioOnly ? "highestaudio" : (quality === "1080" ? "highest" : "highest"),
-      });
+    // Since cobalt tunnel doesn't work reliably, we'll provide direct download services
+    // that the user can use in a new tab
+    
+    // Option 1: Use ssyoutube (works well for downloads)
+    const ssyoutubeUrl = `https://ssyoutube.com/watch?v=${videoId}`;
+    
+    // Option 2: Use y2mate
+    const y2mateUrl = `https://www.y2mate.com/youtube/${videoId}`;
+    
+    // Option 3: Use savefrom
+    const savefromUrl = `https://en.savefrom.net/1-youtube-video-downloader-${videoId}`;
 
-      console.log("Got stream from ytdl_core, collecting chunks...");
+    console.log(`Providing download options for video: ${videoId}`);
 
-      // Collect all chunks
-      const chunks: Uint8Array[] = [];
-      let totalSize = 0;
-      
-      for await (const chunk of stream) {
-        chunks.push(chunk);
-        totalSize += chunk.length;
-        
-        // Limit to 50MB to avoid timeout
-        if (totalSize > 50 * 1024 * 1024) {
-          console.log("File too large, stopping at 50MB");
-          break;
-        }
-      }
-
-      console.log(`Collected ${chunks.length} chunks, total size: ${totalSize} bytes`);
-
-      if (totalSize === 0) {
-        throw new Error("No data received from stream");
-      }
-
-      // Combine chunks into a single Uint8Array
-      const videoData = new Uint8Array(totalSize);
-      let offset = 0;
-      for (const chunk of chunks) {
-        videoData.set(chunk, offset);
-        offset += chunk.length;
-      }
-
-      // Create safe filename
-      const extension = audioOnly ? "mp3" : "mp4";
-      const safeFilename = `${sanitizeFilename(videoTitle)}.${extension}`;
-      
-      console.log(`Sending file: ${safeFilename}, size: ${totalSize} bytes`);
-
-      // Return the video data directly
-      return new Response(videoData, {
-        headers: {
-          ...corsHeaders,
-          "Content-Type": audioOnly ? "audio/mpeg" : "video/mp4",
-          "Content-Length": totalSize.toString(),
-          "Content-Disposition": `attachment; filename="${safeFilename}"`,
-        },
-      });
-
-    } catch (ytdlError) {
-      console.error("ytdl_core error:", ytdlError);
-      
-      // Fallback: return external services
-      const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-      const fallbackServices = [
-        {
-          name: "SSYoutube",
-          url: `https://ssyoutube.com/pt/${videoId}`,
-          description: "Baixe em várias qualidades",
-        },
-        {
-          name: "Y2Mate",
-          url: `https://www.y2mate.com/youtube/${videoId}`,
-          description: "Download rápido e fácil",
-        },
-        {
-          name: "SaveFrom",
-          url: `https://en.savefrom.net/1-youtube-video-downloader-438/#url=${encodeURIComponent(youtubeUrl)}`,
-          description: "Serviço alternativo",
-        },
-      ];
-
-      return new Response(
-        JSON.stringify({
-          success: false,
-          videoId,
-          title: videoTitle,
-          thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-          error: `Erro ao processar: ${ytdlError instanceof Error ? ytdlError.message : "Erro desconhecido"}`,
-          fallbackServices,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    return new Response(
+      JSON.stringify({
+        success: true,
+        videoId: videoId,
+        title: safeTitle,
+        author: videoInfo?.author || "Unknown",
+        downloadServices: [
+          {
+            name: "SSYoutube",
+            url: ssyoutubeUrl,
+            description: "Rápido e fácil",
+          },
+          {
+            name: "Y2Mate",
+            url: y2mateUrl,
+            description: "Múltiplas qualidades",
+          },
+          {
+            name: "SaveFrom",
+            url: savefromUrl,
+            description: "Alternativa confiável",
+          },
+        ],
+        // Primary download URL
+        downloadUrl: ssyoutubeUrl,
+        filename: `${safeTitle}.${audioOnly ? "mp3" : "mp4"}`,
+        quality: quality,
+        audioOnly: audioOnly,
+      }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
 
   } catch (error) {
     console.error("Error:", error);

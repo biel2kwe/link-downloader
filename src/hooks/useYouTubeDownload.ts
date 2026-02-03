@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
-interface FallbackService {
+interface DownloadService {
   name: string;
   url: string;
   description: string;
@@ -8,171 +9,112 @@ interface FallbackService {
 
 interface DownloadResult {
   success: boolean;
+  videoId?: string;
   title?: string;
   downloadUrl?: string;
-  filename?: string;
+  downloadServices?: DownloadService[];
   error?: string;
-  fallbackServices?: FallbackService[];
-  fileSize?: number;
 }
 
 export const useYouTubeDownload = () => {
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [fallbackServices, setFallbackServices] = useState<FallbackService[]>([]);
-  const [videoTitle, setVideoTitle] = useState<string>("");
-  const [downloadProgress, setDownloadProgress] = useState<number>(0);
-  const [fileSize, setFileSize] = useState<number>(0);
+  const [downloadServices, setDownloadServices] = useState<DownloadService[]>([]);
 
-  const processVideo = async (
+  const downloadVideo = async (
     url: string,
-    audioOnly: boolean,
-    quality?: string
+    quality: string,
+    audioOnly: boolean
   ): Promise<DownloadResult> => {
-    setIsProcessing(true);
+    setIsDownloading(true);
+    setProgress(20);
     setError(null);
-    setFallbackServices([]);
-    setVideoTitle("");
-    setDownloadProgress(0);
-    setFileSize(0);
+    setDownloadServices([]);
 
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-      const functionUrl = `${supabaseUrl}/functions/v1/youtube-download`;
+      const qualityMap: Record<string, string> = {
+        "2160p": "2160",
+        "1080p": "1080",
+        "720p": "720",
+        "480p": "480",
+        "360p": "360",
+      };
 
-      console.log("Requesting download from edge function...");
+      setProgress(50);
 
-      const response = await fetch(functionUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${supabaseKey}`,
-          "apikey": supabaseKey,
-        },
-        body: JSON.stringify({
-          url,
-          audioOnly,
-          quality,
-        }),
-      });
-
-      const contentType = response.headers.get("Content-Type") || "";
-      
-      // Check if response is JSON (error or fallback) or binary (video/audio)
-      if (contentType.includes("application/json")) {
-        const data = await response.json();
-        console.log("Edge function response:", data);
-
-        if (data.error && !data.fallbackServices) {
-          setError(data.error);
-          return { success: false, error: data.error };
+      const { data, error: fnError } = await supabase.functions.invoke(
+        "youtube-download",
+        {
+          body: {
+            url,
+            quality: qualityMap[quality] || "720",
+            audioOnly,
+          },
         }
+      );
 
-        setVideoTitle(data.title || "");
+      setProgress(80);
 
-        // If we got fallback services
-        if (data.fallbackServices && data.fallbackServices.length > 0) {
-          setFallbackServices(data.fallbackServices);
-          setError(data.error || "Use um serviço alternativo");
-          return {
-            success: false,
-            title: data.title,
-            error: data.error,
-            fallbackServices: data.fallbackServices,
-          };
-        }
-
-        setError("Nenhum serviço de download disponível");
-        return { success: false, error: "Nenhum serviço de download disponível" };
+      if (fnError) {
+        throw new Error(fnError.message);
       }
 
-      // Response is binary - this is the actual file!
-      console.log("Received binary data, downloading...");
-      
-      const contentLength = response.headers.get("Content-Length");
-      const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
-      setFileSize(totalSize);
-      
-      // Get filename from Content-Disposition header
-      const disposition = response.headers.get("Content-Disposition") || "";
-      const filenameMatch = disposition.match(/filename="?([^";\n]+)"?/);
-      const filename = filenameMatch ? filenameMatch[1] : (audioOnly ? "audio.mp3" : "video.mp4");
-      
-      setVideoTitle(filename.replace(/\.[^.]+$/, '').replace(/_/g, ' '));
-
-      // Read the response as a blob
-      const blob = await response.blob();
-      
-      console.log(`Blob size: ${blob.size} bytes`);
-      setFileSize(blob.size);
-      setDownloadProgress(100);
-
-      if (blob.size === 0) {
-        throw new Error("Arquivo vazio recebido");
+      if (data.error) {
+        setError(data.error);
+        return {
+          success: false,
+          error: data.error,
+        };
       }
 
-      // Create download URL and trigger download
-      const downloadUrl = URL.createObjectURL(blob);
-      
-      // Trigger download
-      const link = document.createElement("a");
-      link.href = downloadUrl;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      // Clean up the URL after a delay
-      setTimeout(() => URL.revokeObjectURL(downloadUrl), 60000);
+      if (data.downloadServices) {
+        setDownloadServices(data.downloadServices);
+      }
+
+      if (data.downloadUrl) {
+        // Open the download service in a new tab
+        window.open(data.downloadUrl, "_blank");
+        setProgress(100);
+
+        return {
+          success: true,
+          videoId: data.videoId,
+          title: data.title,
+          downloadUrl: data.downloadUrl,
+          downloadServices: data.downloadServices,
+        };
+      }
 
       return {
-        success: true,
-        title: filename,
-        filename,
-        fileSize: blob.size,
+        success: false,
+        error: "Nenhuma URL de download disponível",
       };
 
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Erro ao processar";
-      console.error("Process error:", err);
+      const message = err instanceof Error ? err.message : "Erro no download";
+      console.error("Download error:", err);
       setError(message);
-      return { success: false, error: message };
+      return {
+        success: false,
+        error: message,
+      };
     } finally {
-      setIsProcessing(false);
+      setIsDownloading(false);
+      setTimeout(() => setProgress(0), 2000);
     }
   };
 
-  const openService = (url: string) => {
-    window.open(url, "_blank", "noopener,noreferrer");
-  };
-
-  const reset = () => {
-    setFallbackServices([]);
-    setVideoTitle("");
-    setError(null);
-    setDownloadProgress(0);
-    setFileSize(0);
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  const openDownloadService = (serviceUrl: string) => {
+    window.open(serviceUrl, "_blank");
   };
 
   return {
-    processVideo,
-    isProcessing,
+    downloadVideo,
+    isDownloading,
+    progress,
     error,
-    fallbackServices,
-    videoTitle,
-    downloadProgress,
-    fileSize,
-    formatFileSize,
-    openService,
-    reset,
+    downloadServices,
+    openDownloadService,
   };
 };
