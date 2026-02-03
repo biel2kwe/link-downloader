@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { Link, Loader2, Youtube, ExternalLink, Music, Video, Download, CheckCircle, FileDown } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Link, Loader2, Youtube, ExternalLink, Music, Video, Download, CheckCircle, FileDown, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { VideoPreview } from "./VideoPreview";
 import { useToast } from "@/hooks/use-toast";
 import { useYouTubeDownload } from "@/hooks/useYouTubeDownload";
+import { useTheme } from "next-themes";
 
 const extractVideoId = (url: string): string | null => {
   const patterns = [
@@ -26,6 +27,8 @@ export const YouTubeDownloader = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [audioOnly, setAudioOnly] = useState(false);
   const [downloadComplete, setDownloadComplete] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  const { theme, setTheme } = useTheme();
   const { toast } = useToast();
   const { 
     processVideo, 
@@ -39,6 +42,14 @@ export const YouTubeDownloader = () => {
     openService,
     reset,
   } = useYouTubeDownload();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  const handleThemeToggle = () => {
+    setTheme(theme === "dark" ? "light" : "dark");
+  };
 
   const handleUrlSubmit = () => {
     if (!url.trim()) {
@@ -112,6 +123,17 @@ export const YouTubeDownloader = () => {
       </div>
 
       <div className="relative w-full max-w-2xl space-y-8">
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            size="icon"
+            className="rounded-full"
+            onClick={handleThemeToggle}
+            aria-label="Alternar tema"
+          >
+            {mounted && theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </Button>
+        </div>
         {/* Header */}
         <div className="text-center space-y-4">
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-primary/10 border border-primary/20 mb-4">
