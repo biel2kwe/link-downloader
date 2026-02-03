@@ -117,8 +117,9 @@ export const YouTubeDownloader = () => {
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-2xl bg-primary/10 border border-primary/20 mb-4">
             <Youtube className="w-10 h-10 text-primary" />
           </div>
-          <h1 className="text-4xl sm:text-5xl font-extrabold text-foreground tracking-tight">
-            Baixador de videos do Youtube
+          <h1 className="flex items-center justify-center gap-3 text-4xl sm:text-5xl font-extrabold text-foreground tracking-tight">
+            <Youtube className="w-8 h-8 sm:w-10 sm:h-10 text-primary" aria-hidden="true" />
+            <span>Baixador de videos do Youtube</span>
           </h1>
           <p className="text-muted-foreground text-lg">
             Baixe vídeos do YouTube em alta qualidade
